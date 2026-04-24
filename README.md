@@ -134,3 +134,51 @@ For both platforms:
 
 - set `MONGODB_URI`
 - set `PUBLIC_BASE_URL` to your deployed API URL
+
+### Cloud Run Deployment
+
+This repository is Cloud Run-ready using the included multi-stage `Dockerfile`.
+
+Before deploying, review `cloudrun.yaml`. It is configured for scale-to-zero:
+
+- `autoscaling.knative.dev/minScale: "0"` means no always-on instances.
+- `run.googleapis.com/cpu-throttling: "true"` means CPU is throttled outside requests.
+
+1. Update placeholders in `cloudrun.yaml`:
+
+- `PROJECT_ID` in image path
+- `REPLACE_MONGODB_URI`
+- `REPLACE_JWT_SECRET`
+- `REPLACE_PUBLIC_BASE_URL`
+
+2. Set your Google Cloud project:
+
+```bash
+gcloud config set project <YOUR_GCP_PROJECT_ID>
+```
+
+3. Build and push the container image with Cloud Build:
+
+```bash
+gcloud builds submit --tag gcr.io/<YOUR_GCP_PROJECT_ID>/jgames
+```
+
+4. Deploy from the reviewed manifest:
+
+```bash
+gcloud run services replace cloudrun.yaml --region <YOUR_REGION>
+```
+
+Notes:
+
+- Cloud Run injects `PORT`; the API already reads this value.
+- `PUBLIC_BASE_URL` should match your Cloud Run HTTPS URL.
+- You can update secrets later with `gcloud run services update` if needed.
+
+Validate scale-to-zero config after deploy:
+
+```bash
+gcloud run services describe jgames \
+  --region <YOUR_REGION> \
+  --format="yaml(spec.template.metadata.annotations)"
+```
