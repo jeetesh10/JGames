@@ -1,0 +1,149 @@
+openapi: 3.1.0
+info:
+  title: JGames API
+  version: 0.1.0
+  description: API-first game event management backend for company events.
+servers:
+  - url: http://localhost:4000
+paths:
+  /health:
+    get:
+      summary: Health check
+      responses:
+        '200':
+          description: Healthy service
+  /api/auth/player/register:
+    post:
+      summary: Register optional player account for progress tracking
+      responses:
+        '201':
+          description: Player token issued
+  /api/auth/login:
+    post:
+      summary: Login for admin or player account
+      responses:
+        '200':
+          description: Auth token issued
+  /api/events:
+    get:
+      summary: List events
+      responses:
+        '200':
+          description: Event list
+    post:
+      summary: Create event with name, date, description, and optional sponsor
+      responses:
+        '201':
+          description: Event created
+  /api/events/{eventId}/locations:
+    get:
+      summary: List locations for an event
+      parameters:
+        - in: path
+          name: eventId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Location list
+    post:
+      summary: Create location for an event
+      parameters:
+        - in: path
+          name: eventId
+          required: true
+          schema:
+            type: string
+      responses:
+        '201':
+          description: Location created
+  /api/games:
+    get:
+      summary: List game templates
+      responses:
+        '200':
+          description: Game list
+    post:
+      summary: Create game template
+      responses:
+        '201':
+          description: Game created
+  /api/event-games:
+    post:
+      summary: Create event-game mapping for location
+      responses:
+        '201':
+          description: Event game created
+  /api/event-games/{eventGameId}/join-link:
+    get:
+      summary: Get player join URL and QR code
+      parameters:
+        - in: path
+          name: eventGameId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Join link response
+  /api/join/{joinToken}:
+    post:
+      summary: Join player to game using token
+      parameters:
+        - in: path
+          name: joinToken
+          required: true
+          schema:
+            type: string
+      responses:
+        '201':
+          description: Player joined
+  /api/scores:
+    post:
+      summary: Submit score for joined player
+      responses:
+        '201':
+          description: Score submitted
+  /api/leaderboards/game/{eventGameId}:
+    get:
+      summary: Game-level leaderboard
+      parameters:
+        - in: path
+          name: eventGameId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Leaderboard
+  /api/leaderboards/location/{locationId}:
+    get:
+      summary: Location-level leaderboard
+      parameters:
+        - in: path
+          name: locationId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Leaderboard
+  /api/leaderboards/event/{eventId}:
+    get:
+      summary: Event-level leaderboard
+      parameters:
+        - in: path
+          name: eventId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Leaderboard
+  /api/players/me/progress:
+    get:
+      summary: Authenticated player progress (admin can query with playerId)
+      responses:
+        '200':
+          description: Player progress summary
