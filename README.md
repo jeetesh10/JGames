@@ -182,3 +182,86 @@ gcloud run services describe jgames \
   --region <YOUR_REGION> \
   --format="yaml(spec.template.metadata.annotations)"
 ```
+
+## Current Project State (Codespace Handoff)
+
+This section is a snapshot for pausing work and resuming later from a new codespace.
+
+### What Is Already Done
+
+- Backend + frontend are integrated and deployable via container.
+- Cloud Run deployment files are present:
+	- `Dockerfile`
+	- `.dockerignore`
+	- `cloudrun.yaml`
+	- `deploy-cloud-run.sh`
+- Cloud Run configuration is set for scale-to-zero behavior:
+	- `autoscaling.knative.dev/minScale: "0"`
+	- `run.googleapis.com/cpu-throttling: "true"`
+- Cloud Build lockfile compatibility issue was fixed (`npm ci` on npm 10).
+- Cloud Run startup issue was fixed by listening on `PORT` before DB connection and retrying DB connection in the background.
+- Admin UI now has a **Stress Test** modal that can trigger stress test data generation and load simulation.
+- Backend has an admin endpoint for stress execution.
+- Stress scenario game key generation was fixed to stay within schema key length limits.
+
+### Stress Test Capability (Now Available)
+
+You can run a scenario for:
+
+- multiple events
+- multiple games per event
+- shared games across events
+- random location assignment
+- concurrent player join and score submission
+
+Default UI scenario values currently align with:
+
+- 3 events
+- 5 games/event
+- 5 locations
+- 200 players
+- high concurrency
+
+### Important Behavior Notes
+
+- Cloud Run production runtime should not set `PORT` manually.
+- Cloud Run injects `PORT` automatically (typically `8080`).
+- `PUBLIC_BASE_URL` in production must be the Cloud Run service URL, not a `github.dev` URL.
+- Stress runs create real records. Use staging data/environment when possible.
+
+### Resume Checklist (New Codespace)
+
+1. Clone/open repo and install dependencies:
+
+```bash
+npm install
+```
+
+2. Configure `.env` for local development only:
+
+```bash
+MONGODB_URI=...
+JWT_SECRET=...
+PORT=4000
+PUBLIC_BASE_URL=http://localhost:4000
+```
+
+3. Start local dev:
+
+```bash
+npm run dev
+```
+
+4. For Cloud Run deploys, verify latest commit is deployed and revision is healthy.
+
+### Production Verification Checklist
+
+1. Confirm latest commit on `main` is deployed by Cloud Build.
+2. Confirm latest Cloud Run revision is receiving `100%` traffic.
+3. Open `/health` and verify API response.
+4. Open Admin UI and verify Stress Test modal opens and executes.
+
+### Operational Security Reminder
+
+- Do not keep production secrets in docs or committed files.
+- Rotate credentials/secrets if they were exposed in chat history or logs.
