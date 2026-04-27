@@ -40,7 +40,9 @@ import type {
 	LeaderboardResponse,
 	DashboardSummaryResponse,
 	EventGameParticipantsResponse,
-	ScoreEntryRecord
+	ScoreEntryRecord,
+	StressScenarioRequest,
+	StressScenarioResponse
 } from "./types";
 
 // ─── Auth helpers ─────────────────────────────────────────────────────────────
@@ -781,6 +783,7 @@ function AdminShell({ token, onLogout }: { token: string; onLogout: () => void }
 	const [activeTab, setActiveTab] = useState<"dashboard" | "events" | "leaderboards">("dashboard");
 	const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
 	const [showWizard, setShowWizard] = useState(false);
+	const [showStressModal, setShowStressModal] = useState(false);
 
 	const loadWorkspace = useCallback(async () => {
 		setGlobalError(null);
@@ -843,12 +846,20 @@ function AdminShell({ token, onLogout }: { token: string; onLogout: () => void }
 							{selectedEventId ? "Event Analytics" : activeTab.replace("-", " ")}
 						</h1>
 					</div>
-					<button
-						onClick={() => setShowWizard(true)}
-						className="bg-[#E31837] hover:bg-[#c1142f] text-white px-4 py-2 rounded-full flex items-center gap-2 font-bold shadow-md transition-all active:scale-95"
-					>
-						<PlusCircle size={20} /> <span className="hidden sm:inline">Launch Wizard</span>
-					</button>
+					<div className="flex items-center gap-2">
+						<button
+							onClick={() => setShowStressModal(true)}
+							className="bg-[#005696] hover:bg-[#004477] text-white px-4 py-2 rounded-full flex items-center gap-2 font-bold shadow-md transition-all active:scale-95"
+						>
+							<Activity size={18} /> <span className="hidden sm:inline">Stress Test</span>
+						</button>
+						<button
+							onClick={() => setShowWizard(true)}
+							className="bg-[#E31837] hover:bg-[#c1142f] text-white px-4 py-2 rounded-full flex items-center gap-2 font-bold shadow-md transition-all active:scale-95"
+						>
+							<PlusCircle size={20} /> <span className="hidden sm:inline">Launch Wizard</span>
+						</button>
+					</div>
 				</header>
 
 				<div className="p-6 max-w-7xl mx-auto">
@@ -874,6 +885,139 @@ function AdminShell({ token, onLogout }: { token: string; onLogout: () => void }
 			{showWizard && (
 				<WizardModal token={token} events={events} games={games} onClose={() => setShowWizard(false)} onComplete={() => { setShowWizard(false); void loadWorkspace(); }} />
 			)}
+
+			{showStressModal && (
+				<StressScenarioModal
+					token={token}
+					onClose={() => setShowStressModal(false)}
+					onComplete={() => {
+						void loadWorkspace();
+					}}
+				/>
+			)}
+		</div>
+	);
+}
+
+function StressScenarioModal({
+	token,
+	onClose,
+	onComplete
+}: {
+	token: string;
+	onClose: () => void;
+	onComplete: () => void;
+}) {
+	const [form, setForm] = useState<StressScenarioRequest>({
+		eventCount: 3,
+		gamesPerEvent: 5,
+		sharedGameCount: 3,
+		locationCount: 5,
+		playerCount: 200,
+		concurrency: 50,
+		maxScore: 10
+	});
+	const [running, setRunning] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const [result, setResult] = useState<StressScenarioResponse | null>(null);
+
+	function updateNumberField<K extends keyof StressScenarioRequest>(key: K, value: string) {
+		const parsed = Number(value);
+		setForm((prev) => ({
+			...prev,
+			[key]: Number.isFinite(parsed) ? parsed : prev[key]
+		}));
+	}
+
+	async function runScenario() {
+		setRunning(true);
+		setError(null);
+		setResult(null);
+		try {
+			const response = await authed<StressScenarioResponse>("/api/admin/stress-scenario", token, {
+				method: "POST",
+				body: JSON.stringify(form)
+			});
+			setResult(response);
+			onComplete();
+		} catch (caught) {
+			setError(caught instanceof Error ? caught.message : "Unable to run stress scenario");
+		} finally {
+			setRunning(false);
+		}
+	}
+
+	return (
+		<div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+			<div className="bg-white w-full max-w-3xl rounded-3xl overflow-hidden shadow-2xl">
+				<div className="bg-[#005696] p-5 text-white flex items-center justify-between">
+					<h3 className="text-lg font-black uppercase tracking-widest">Run Stress Scenario</h3>
+					<button onClick={onClose} className="hover:bg-white/20 p-1 rounded-full transition-colors"><X size={20} /></button>
+				</div>
+				<div className="p-6 space-y-4 max-h-[85vh] overflow-y-auto">
+					<p className="text-sm text-gray-600">
+						Creates test data and simulates concurrent joins/scores. Use on staging environments.
+					</p>
+
+					<div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+						<label className="text-xs font-black text-gray-500 uppercase tracking-widest">Events
+							<input type="number" min={1} value={form.eventCount} onChange={(event) => updateNumberField("eventCount", event.target.value)} className="mt-1 w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-sm font-bold outline-none focus:border-[#005696]" />
+						</label>
+						<label className="text-xs font-black text-gray-500 uppercase tracking-widest">Games/Event
+							<input type="number" min={1} value={form.gamesPerEvent} onChange={(event) => updateNumberField("gamesPerEvent", event.target.value)} className="mt-1 w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-sm font-bold outline-none focus:border-[#005696]" />
+						</label>
+						<label className="text-xs font-black text-gray-500 uppercase tracking-widest">Shared Games
+							<input type="number" min={0} value={form.sharedGameCount} onChange={(event) => updateNumberField("sharedGameCount", event.target.value)} className="mt-1 w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-sm font-bold outline-none focus:border-[#005696]" />
+						</label>
+						<label className="text-xs font-black text-gray-500 uppercase tracking-widest">Locations
+							<input type="number" min={1} value={form.locationCount} onChange={(event) => updateNumberField("locationCount", event.target.value)} className="mt-1 w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-sm font-bold outline-none focus:border-[#005696]" />
+						</label>
+						<label className="text-xs font-black text-gray-500 uppercase tracking-widest">Players
+							<input type="number" min={1} value={form.playerCount} onChange={(event) => updateNumberField("playerCount", event.target.value)} className="mt-1 w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-sm font-bold outline-none focus:border-[#005696]" />
+						</label>
+						<label className="text-xs font-black text-gray-500 uppercase tracking-widest">Concurrency
+							<input type="number" min={1} value={form.concurrency} onChange={(event) => updateNumberField("concurrency", event.target.value)} className="mt-1 w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-sm font-bold outline-none focus:border-[#005696]" />
+						</label>
+						<label className="text-xs font-black text-gray-500 uppercase tracking-widest">Max Score
+							<input type="number" min={1} value={form.maxScore} onChange={(event) => updateNumberField("maxScore", event.target.value)} className="mt-1 w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-sm font-bold outline-none focus:border-[#005696]" />
+						</label>
+					</div>
+
+					<div className="flex items-center gap-2">
+						<button
+							onClick={() => { void runScenario(); }}
+							disabled={running}
+							className="px-4 py-2 rounded-xl bg-[#E31837] text-white text-sm font-black uppercase tracking-widest hover:bg-[#c1142f] disabled:opacity-60"
+						>
+							{running ? "Running..." : "Run Scenario"}
+						</button>
+						<button
+							onClick={onClose}
+							className="px-4 py-2 rounded-xl border border-gray-200 text-sm font-bold text-gray-600 hover:bg-gray-50"
+						>
+							Close
+						</button>
+					</div>
+
+					{error && <p className="text-sm font-bold text-[#E31837] bg-red-50 border border-red-100 rounded-xl p-3">{error}</p>}
+
+					{result && (
+						<div className="space-y-3">
+							<div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+								<div className="bg-gray-50 rounded-xl p-3"><p className="text-[10px] uppercase text-gray-400 font-black">Events</p><p className="text-lg font-black text-[#005696]">{result.summary.eventCount}</p></div>
+								<div className="bg-gray-50 rounded-xl p-3"><p className="text-[10px] uppercase text-gray-400 font-black">Event Games</p><p className="text-lg font-black text-[#005696]">{result.summary.eventGameCount}</p></div>
+								<div className="bg-gray-50 rounded-xl p-3"><p className="text-[10px] uppercase text-gray-400 font-black">Players</p><p className="text-lg font-black text-[#005696]">{result.summary.playerCount}</p></div>
+								<div className="bg-gray-50 rounded-xl p-3"><p className="text-[10px] uppercase text-gray-400 font-black">Total Time</p><p className="text-lg font-black text-[#005696]">{Math.round(result.summary.totalDurationMs)}ms</p></div>
+							</div>
+
+							<div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
+								<p className="text-[10px] uppercase text-gray-400 font-black mb-2">Execution Log</p>
+								<pre className="text-xs text-gray-700 whitespace-pre-wrap max-h-48 overflow-auto">{result.logs.join("\n")}</pre>
+							</div>
+						</div>
+					)}
+				</div>
+			</div>
 		</div>
 	);
 }

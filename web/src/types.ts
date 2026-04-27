@@ -140,3 +140,45 @@ export interface ScoreEntryRecord {
   points: number;
   source: "MANUAL" | "AUTO";
 }
+
+export interface StressScenarioRequest {
+  eventCount: number;
+  gamesPerEvent: number;
+  sharedGameCount: number;
+  locationCount: number;
+  playerCount: number;
+  concurrency: number;
+  maxScore: number;
+}
+
+export interface StressScenarioSummary {
+  eventCount: number;
+  gameTemplatesCreated: number;
+  eventGameCount: number;
+  locationCount: number;
+  playerCount: number;
+  joinDurationMs: number;
+  scoreDurationMs: number;
+  totalDurationMs: number;
+  participantsByEvent: Array<{
+    eventId: string;
+    eventName: string;
+    count: number;
+  }>;
+  participantsByLocation: Array<{
+    locationId: string;
+    locationName: string;
+    eventName: string;
+    count: number;
+  }>;
+  topByEvent: Array<{
+    eventId: string;
+    eventName: string;
+    leaders: LeaderboardEntry[];
+  }>;
+}
+
+export interface StressScenarioResponse {
+  summary: StressScenarioSummary;
+  logs: string[];
+}

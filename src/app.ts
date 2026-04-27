@@ -20,6 +20,7 @@ import { ParticipationModel } from "./models/Participation.js";
 import { PlayerModel } from "./models/Player.js";
 import { ScoreEntryModel } from "./models/ScoreEntry.js";
 import { UserModel } from "./models/User.js";
+import { runStressScenario } from "./utils/stressScenario.js";
 import { asObjectId } from "./utils/objectId.js";
 
 const joinTokenGenerator = customAlphabet("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", 10);
@@ -135,6 +136,18 @@ const scoreSchema = z.object({
   points: z.number(),
   source: z.enum(["MANUAL", "AUTO"]).optional()
 });
+
+const stressScenarioSchema = z
+  .object({
+    eventCount: z.number().int().min(1).max(20).optional(),
+    gamesPerEvent: z.number().int().min(1).max(20).optional(),
+    sharedGameCount: z.number().int().min(0).max(20).optional(),
+    locationCount: z.number().int().min(1).max(50).optional(),
+    playerCount: z.number().int().min(1).max(2000).optional(),
+    concurrency: z.number().int().min(1).max(500).optional(),
+    maxScore: z.number().int().min(1).max(1000).optional()
+  })
+  .strict();
 
 function parseOrThrow<T>(schema: z.ZodType<T>, value: unknown): T {
   const parsed = schema.safeParse(value);
@@ -1058,6 +1071,39 @@ app.get(
       totalPlayers: distinctPlayers.length,
       leaderboard
     });
+  })
+);
+
+app.post(
+  "/api/admin/stress-scenario",
+  requireAuth,
+  requireRole(["ADMIN"]),
+  asyncHandler(async (req, res) => {
+    const payload = parseOrThrow(stressScenarioSchema, req.body);
+    const authorizationHeader = req.header("authorization") ?? "";
+
+    if (!authorizationHeader.startsWith("Bearer ")) {
+      throw new AppError(401, "Bearer token is required");
+    }
+
+    const token = authorizationHeader.slice("Bearer ".length).trim();
+    if (!token) {
+      throw new AppError(401, "Bearer token is required");
+    }
+
+    const logs: string[] = [];
+    const apiBaseUrl = resolveAppBaseUrl(req);
+
+    const summary = await runStressScenario({
+      apiBaseUrl,
+      adminToken: token,
+      options: payload,
+      log: (line) => {
+        logs.push(line);
+      }
+    });
+
+    res.json({ summary, logs });
   })
 );
 
