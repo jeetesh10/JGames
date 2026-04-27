@@ -117,6 +117,14 @@ function pickRandom<T>(items: T[]): T {
   return items[randomInt(0, items.length - 1)];
 }
 
+function compactKey(prefix: string, sequence: number): string {
+  const safePrefix = prefix.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  const timePart = Date.now().toString(36);
+  const randomPart = Math.random().toString(36).slice(2, 7);
+  const base = `${safePrefix}_${sequence}_${timePart}_${randomPart}`;
+  return base.slice(0, 40);
+}
+
 async function requestJson<T>(
   apiBaseUrl: string,
   path: string,
@@ -212,7 +220,7 @@ export async function runStressScenario(params: RunStressScenarioParams): Promis
       headers: authHeaders(adminToken),
       body: JSON.stringify({
         name: `Shared Game ${index + 1}`,
-        key: `shared_game_${Date.now()}_${index + 1}`,
+        key: compactKey("shared_game", index + 1),
         scoringMode: "INDIVIDUAL",
         scoreUnit: "points"
       })
@@ -230,7 +238,7 @@ export async function runStressScenario(params: RunStressScenarioParams): Promis
         headers: authHeaders(adminToken),
         body: JSON.stringify({
           name: `Event ${event.name} Game ${index + 1}`,
-          key: `event_${event._id}_game_${Date.now()}_${index + 1}`,
+          key: compactKey(`event_${event._id}_game`, index + 1),
           scoringMode: "INDIVIDUAL",
           scoreUnit: "points"
         })
