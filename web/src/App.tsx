@@ -412,6 +412,7 @@ function PlayerJoinPage() {
 	const [selfRoundNumber, setSelfRoundNumber] = useState("1");
 	const [selfScoringBusy, setSelfScoringBusy] = useState(false);
 	const [selfScoringStatus, setSelfScoringStatus] = useState<string | null>(null);
+	const [leaderboardOnlyMode, setLeaderboardOnlyMode] = useState(false);
 	const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
 	const [loadingBoard, setLoadingBoard] = useState(false);
 
@@ -424,6 +425,7 @@ function PlayerJoinPage() {
 		setPlayerId(null);
 		setLeaderboard([]);
 		setSelfScoringStatus(null);
+		setLeaderboardOnlyMode(false);
 	}, [joinToken]);
 
 	async function loadJoinMeta() {
@@ -520,6 +522,7 @@ function PlayerJoinPage() {
 			if (eventGameId) {
 				await loadLeaderboardForGame(eventGameId);
 			}
+			setLeaderboardOnlyMode(true);
 		} catch (caught) {
 			setError(caught instanceof Error ? caught.message : "Unable to submit score");
 		} finally {
@@ -528,11 +531,12 @@ function PlayerJoinPage() {
 	}
 
 	const canSelfScore = (joinMeta?.scoringAuthority ?? "ADMIN_ONLY") !== "ADMIN_ONLY";
+	const isRegistered = Boolean(playerId);
 
 	return (
 		<div className="min-h-screen bg-[#F4F7F9] p-3 sm:p-4 md:p-6">
-			<div className="w-full max-w-4xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6">
-				<section className="bg-white rounded-3xl shadow-xl p-5 sm:p-6 md:p-8">
+			<div className={`w-full max-w-4xl mx-auto ${leaderboardOnlyMode ? "" : "grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6"}`}>
+				{!leaderboardOnlyMode && <section className="bg-white rounded-3xl shadow-xl p-5 sm:p-6 md:p-8">
 					<div className="mb-6">
 						<div className="text-[#E31837] text-2xl font-black italic tracking-tighter uppercase">PETSMART</div>
 						<div className="text-[#005696] text-xs font-bold uppercase tracking-widest mt-1">Wag More Bark Less - Player Join</div>
@@ -552,38 +556,45 @@ function PlayerJoinPage() {
 						)}
 						{metaError && <p className="text-[11px] font-bold text-[#E31837]">{metaError}</p>}
 					</div>
-					<form onSubmit={(event) => { void joinGame(event); }} className="space-y-4 mt-6">
-						<div>
-							<label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Display Name</label>
-							<input
-								required
-								value={displayName}
-								onChange={(event) => setDisplayName(event.target.value)}
-								className="w-full p-4 bg-gray-50 border-2 border-gray-200 rounded-xl focus:border-[#E31837] outline-none font-bold"
-								placeholder="Enter your name"
-							/>
+					{!isRegistered ? (
+						<form onSubmit={(event) => { void joinGame(event); }} className="space-y-4 mt-6">
+							<div>
+								<label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Display Name</label>
+								<input
+									required
+									value={displayName}
+									onChange={(event) => setDisplayName(event.target.value)}
+									className="w-full p-4 bg-gray-50 border-2 border-gray-200 rounded-xl focus:border-[#E31837] outline-none font-bold"
+									placeholder="Enter your name"
+								/>
+							</div>
+							<div>
+								<label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Email (optional)</label>
+								<input
+									type="email"
+									value={email}
+									onChange={(event) => setEmail(event.target.value)}
+									className="w-full p-4 bg-gray-50 border-2 border-gray-200 rounded-xl focus:border-[#E31837] outline-none font-bold"
+									placeholder="you@example.com"
+								/>
+							</div>
+							{error && <p className="text-[#E31837] bg-red-50 border border-red-100 rounded-xl p-3 text-sm font-bold">{error}</p>}
+							<button
+								type="submit"
+								disabled={submitting}
+								className="w-full py-4 bg-[#E31837] text-white rounded-xl font-black uppercase tracking-widest hover:bg-[#c1142f] disabled:opacity-50 transition-colors"
+							>
+								{submitting ? "Registering..." : "Register For Game"}
+							</button>
+						</form>
+					) : (
+						<div className="mt-6 space-y-3">
+							{status && <p className="text-green-700 bg-green-50 border border-green-100 rounded-xl p-3 text-sm font-bold">{status}</p>}
+							{error && <p className="text-[#E31837] bg-red-50 border border-red-100 rounded-xl p-3 text-sm font-bold">{error}</p>}
+							<p className="text-xs font-bold text-gray-500">Registration complete. You can now submit score (if enabled) and follow the live leaderboard.</p>
 						</div>
-						<div>
-							<label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Email (optional)</label>
-							<input
-								type="email"
-								value={email}
-								onChange={(event) => setEmail(event.target.value)}
-								className="w-full p-4 bg-gray-50 border-2 border-gray-200 rounded-xl focus:border-[#E31837] outline-none font-bold"
-								placeholder="you@example.com"
-							/>
-						</div>
-						{status && <p className="text-green-700 bg-green-50 border border-green-100 rounded-xl p-3 text-sm font-bold">{status}</p>}
-						{error && <p className="text-[#E31837] bg-red-50 border border-red-100 rounded-xl p-3 text-sm font-bold">{error}</p>}
-						<button
-							type="submit"
-							disabled={submitting}
-							className="w-full py-4 bg-[#E31837] text-white rounded-xl font-black uppercase tracking-widest hover:bg-[#c1142f] disabled:opacity-50 transition-colors"
-						>
-							{submitting ? "Registering..." : "Register For Game"}
-						</button>
-					</form>
-					{playerId && (
+					)}
+					{playerId && !leaderboardOnlyMode && (
 						<div className="mt-5 rounded-xl border border-gray-100 p-4 bg-gray-50 space-y-3">
 							<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Score Submission</p>
 							{canSelfScore ? (
@@ -623,12 +634,14 @@ function PlayerJoinPage() {
 						</div>
 					)}
 					<p className="mt-4 text-[11px] text-gray-400 font-bold">Join token: {joinToken}</p>
-				</section>
+				</section>}
 
 				<section className="bg-white rounded-3xl shadow-xl p-5 sm:p-6 md:p-8">
 					<div className="flex items-center justify-between mb-4">
 						<h2 className="text-lg font-black text-[#005696] uppercase tracking-tight">Live Leaderboard</h2>
-						{eventGameId && <span className="text-[10px] text-gray-400 font-bold uppercase">Game Ready</span>}
+						{leaderboardOnlyMode
+							? <span className="text-[10px] text-green-700 font-bold uppercase">Score submitted</span>
+							: eventGameId && <span className="text-[10px] text-gray-400 font-bold uppercase">Game Ready</span>}
 					</div>
 					<div className="mb-4 rounded-xl border border-gray-100 p-3 bg-gray-50">
 						<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Now Playing</p>
