@@ -1284,7 +1284,6 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 	const [manageBusy, setManageBusy] = useState(false);
 	const [manageError, setManageError] = useState<string | null>(null);
 	const [manageMessage, setManageMessage] = useState<string | null>(null);
-	const [eventScoringAuthority, setEventScoringAuthority] = useState<"ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID">("ADMIN_ONLY");
 	const [newLocationName, setNewLocationName] = useState("");
 	const [newLocationVenue, setNewLocationVenue] = useState("");
 	const [bulkLocationInput, setBulkLocationInput] = useState("");
@@ -1299,6 +1298,7 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 	const [deployLocationId, setDeployLocationId] = useState("");
 	const [selectedDeployGameIds, setSelectedDeployGameIds] = useState<string[]>([]);
 	const [deployRoundsEnabled, setDeployRoundsEnabled] = useState(false);
+	const [deployScoringAuthority, setDeployScoringAuthority] = useState<"ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID">("ADMIN_ONLY");
 	const [deployTotalRounds, setDeployTotalRounds] = useState("3");
 	const [deployMaxPointsPerRound, setDeployMaxPointsPerRound] = useState("10");
 	const gameNameById = useMemo(() => new Map(localGames.map((game) => [game._id, game.name])), [localGames]);
@@ -1357,12 +1357,6 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 	useEffect(() => {
 		setLocalGames(games);
 	}, [games]);
-
-	useEffect(() => {
-		if (selectedEvent?.scoringAuthority) {
-			setEventScoringAuthority(selectedEvent.scoringAuthority);
-		}
-	}, [selectedEvent?.scoringAuthority]);
 
 	useEffect(() => { void loadContext(); }, [eventId]);
 	useEffect(() => { void applyFilters(); }, [leaderboard, eventGames, detailLocFilter, detailGameFilter]);
@@ -1440,24 +1434,6 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 			}
 		})();
 	}, [quickSetupOpen, token]);
-
-	async function saveEventScoringAuthority() {
-		setManageBusy(true);
-		setManageError(null);
-		setManageMessage(null);
-		try {
-			await authed<EventRecord>(`/api/events/${eventId}`, token, {
-				method: "PATCH",
-				body: JSON.stringify({ scoringAuthority: eventScoringAuthority })
-			});
-			setManageMessage("Event scoring mode updated");
-			void onReload();
-		} catch (caught) {
-			setManageError(caught instanceof Error ? caught.message : "Unable to update scoring mode");
-		} finally {
-			setManageBusy(false);
-		}
-	}
 
 	const resolveJoinLink = useCallback(async (eventGame: EventGameRecord): Promise<JoinLinkResponse> => {
 		const fallback = joinLinks[eventGame._id] ?? buildClientJoinLink(eventGame._id, eventGame.joinToken);
@@ -1679,6 +1655,7 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 							locationId: deployLocationId,
 							gameId,
 							settings: {
+								scoringAuthority: deployScoringAuthority,
 								roundsEnabled: deployRoundsEnabled,
 								totalRounds: deployRoundsEnabled ? Number(deployTotalRounds) : undefined,
 								maxPointsPerRound: Number(deployMaxPointsPerRound) || undefined
@@ -1960,31 +1937,21 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 							{manageError && <p className="mb-3 text-[11px] font-bold text-[#E31837] bg-red-50 border border-red-100 rounded-lg px-2 py-1.5">{manageError}</p>}
 
 							<div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
-								<form onSubmit={(event) => { event.preventDefault(); void saveEventScoringAuthority(); }} className="space-y-2 border border-gray-100 rounded-xl p-3">
-									<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">1) Event Scoring Mode</p>
-									<select value={eventScoringAuthority} onChange={(event) => setEventScoringAuthority(event.target.value as "ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID")} className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]">
-										<option value="ADMIN_ONLY">Admin only</option>
-										<option value="PLAYER_SELF">Player self-scoring</option>
-										<option value="HYBRID">Hybrid (Admin + Player)</option>
-									</select>
-									<button disabled={manageBusy} className="w-full py-2 rounded-xl bg-[#005696] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#004477] disabled:opacity-60">Save Scoring Mode</button>
-								</form>
-
 								<form onSubmit={(event) => { void addLocation(event); }} className="space-y-2 border border-gray-100 rounded-xl p-3">
-									<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">2) Create Location</p>
+									<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">1) Create Location</p>
 									<input value={newLocationName} onChange={(event) => setNewLocationName(event.target.value)} placeholder="Location name" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
 									<input value={newLocationVenue} onChange={(event) => setNewLocationVenue(event.target.value)} placeholder="Venue (optional)" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
 									<button disabled={manageBusy} className="w-full py-2 rounded-xl bg-[#005696] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#004477] disabled:opacity-60">Add Location</button>
 								</form>
 
 								<form onSubmit={(event) => { void addMultipleLocations(event); }} className="space-y-2 border border-gray-100 rounded-xl p-3">
-									<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">3) Add Multiple Locations</p>
+									<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">2) Add Multiple Locations</p>
 									<textarea value={bulkLocationInput} onChange={(event) => setBulkLocationInput(event.target.value)} rows={4} placeholder="One location per line" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
 									<button disabled={manageBusy} className="w-full py-2 rounded-xl bg-[#005696] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#004477] disabled:opacity-60">Add All Locations</button>
 								</form>
 
 								<form onSubmit={(event) => { void importTemplateLocations(event); }} className="space-y-2 border border-gray-100 rounded-xl p-3">
-									<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">4) Reuse Existing Locations</p>
+									<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">3) Reuse Existing Locations</p>
 									<div className="max-h-36 overflow-y-auto space-y-1 border border-gray-100 rounded-lg p-2">
 										{allLocations.filter((entry) => entry.eventId !== eventId).map((entry) => {
 											const checked = selectedTemplateLocationIds.includes(entry._id);
@@ -2007,14 +1974,14 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 								</form>
 
 								<form onSubmit={(event) => { void addGame(event); }} className="space-y-2 border border-gray-100 rounded-xl p-3">
-									<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">5) Create Game</p>
+									<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">4) Create Game</p>
 									<input value={newGameName} onChange={(event) => setNewGameName(event.target.value)} placeholder="Game name" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
 									<input value={newGameScoreUnit} onChange={(event) => setNewGameScoreUnit(event.target.value)} placeholder="Score unit (points)" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
 									<button disabled={manageBusy} className="w-full py-2 rounded-xl bg-[#005696] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#004477] disabled:opacity-60">Create Game</button>
 								</form>
 
 								<form onSubmit={(event) => { void saveGameEdits(event); }} className="space-y-2 border border-gray-100 rounded-xl p-3">
-									<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">6) Edit Existing Game</p>
+									<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">5) Edit Existing Game</p>
 									<select value={editGameId} onChange={(event) => {
 										const target = localGames.find((entry) => entry._id === event.target.value);
 										setEditGameId(event.target.value);
@@ -2035,10 +2002,15 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 								</form>
 
 								<form onSubmit={(event) => { void deployGameToLocation(event); }} className="space-y-2 border border-gray-100 rounded-xl p-3">
-									<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">7) Deploy Multiple Games To One Location</p>
+									<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">6) Deploy Multiple Games To One Location</p>
 									<select value={deployLocationId} onChange={(event) => setDeployLocationId(event.target.value)} className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]">
 										<option value="">Select location</option>
 										{locations.map((location) => <option key={location._id} value={location._id}>{location.name}</option>)}
+									</select>
+									<select value={deployScoringAuthority} onChange={(event) => setDeployScoringAuthority(event.target.value as "ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID")} className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]">
+										<option value="ADMIN_ONLY">Scoring: Admin only</option>
+										<option value="PLAYER_SELF">Scoring: Player self-scoring</option>
+										<option value="HYBRID">Scoring: Hybrid (Admin + Player)</option>
 									</select>
 									<div className="max-h-36 overflow-y-auto space-y-1 border border-gray-100 rounded-lg p-2">
 										{localGames.map((game) => (
@@ -2472,7 +2444,6 @@ function WizardModal({ token, events, games, onClose, onComplete }: {
 	const [creatingEvent, setCreatingEvent] = useState(true);
 	const [newEventName, setNewEventName] = useState("");
 	const [newEventDate, setNewEventDate] = useState(new Date().toISOString().slice(0, 10));
-	const [newEventScoringAuthority, setNewEventScoringAuthority] = useState<"ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID">("ADMIN_ONLY");
 
 	const [creatingLocation, setCreatingLocation] = useState(true);
 	const [newLocationName, setNewLocationName] = useState("");
@@ -2484,6 +2455,7 @@ function WizardModal({ token, events, games, onClose, onComplete }: {
 	const [newGameName, setNewGameName] = useState("");
 	const [newGameScoreUnit, setNewGameScoreUnit] = useState("points");
 	const [wizardRoundsEnabled, setWizardRoundsEnabled] = useState(false);
+	const [wizardScoringAuthority, setWizardScoringAuthority] = useState<"ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID">("ADMIN_ONLY");
 	const [wizardTotalRounds, setWizardTotalRounds] = useState("3");
 	const [wizardMaxPointsPerRound, setWizardMaxPointsPerRound] = useState("10");
 
@@ -2508,8 +2480,7 @@ function WizardModal({ token, events, games, onClose, onComplete }: {
 				method: "POST",
 				body: JSON.stringify({
 					name: newEventName.trim(),
-					eventDate: newEventDate,
-					scoringAuthority: newEventScoringAuthority
+					eventDate: newEventDate
 				})
 			});
 			await pickEvent(ev);
@@ -2560,6 +2531,7 @@ function WizardModal({ token, events, games, onClose, onComplete }: {
 					locationId: selectedLocation._id,
 					gameId: gm._id,
 					settings: {
+						scoringAuthority: wizardScoringAuthority,
 						roundsEnabled: wizardRoundsEnabled,
 						totalRounds: wizardRoundsEnabled ? Number(wizardTotalRounds) : undefined,
 						maxPointsPerRound: Number(wizardMaxPointsPerRound) || undefined
@@ -2623,11 +2595,6 @@ function WizardModal({ token, events, games, onClose, onComplete }: {
 							<label className="block text-sm font-bold text-gray-700 uppercase">New Event Name</label>
 							<input autoFocus type="text" value={newEventName} onChange={(e) => setNewEventName(e.target.value)} placeholder="e.g. Summer Paw-ty 2026" className="w-full p-4 bg-gray-50 border-2 border-gray-200 rounded-xl focus:border-[#E31837] outline-none font-bold" />
 							<input type="date" value={newEventDate} onChange={(e) => setNewEventDate(e.target.value)} className="w-full p-4 bg-gray-50 border-2 border-gray-200 rounded-xl focus:border-[#E31837] outline-none font-bold" />
-							<select value={newEventScoringAuthority} onChange={(e) => setNewEventScoringAuthority(e.target.value as "ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID")} className="w-full p-4 bg-gray-50 border-2 border-gray-200 rounded-xl focus:border-[#E31837] outline-none font-bold">
-								<option value="ADMIN_ONLY">Scoring: Admin only</option>
-								<option value="PLAYER_SELF">Scoring: Player self-scoring</option>
-								<option value="HYBRID">Scoring: Hybrid (Admin + Player)</option>
-							</select>
 							<div className="flex gap-3 pt-2">
 								<button onClick={() => setCreatingEvent(false)} className="flex-1 py-4 px-6 rounded-xl border-2 border-gray-100 font-bold text-gray-500 hover:bg-gray-50">Cancel</button>
 								<button disabled={!newEventName || busy} onClick={() => { void createEvent(); }} className={`flex-1 py-4 px-6 rounded-xl font-bold text-white ${newEventName && !busy ? "bg-[#E31837]" : "bg-gray-300"}`}>{busy ? "Creating…" : "Continue"}</button>
@@ -2681,6 +2648,11 @@ function WizardModal({ token, events, games, onClose, onComplete }: {
 						<div className="space-y-4">
 							<label className="block text-sm font-bold text-gray-700 uppercase tracking-tight">Select Game for <span className="text-[#005696]">{selectedLocation?.name}</span></label>
 							<div className="grid grid-cols-1 sm:grid-cols-3 gap-2 p-3 bg-gray-50 border border-gray-100 rounded-xl">
+								<select value={wizardScoringAuthority} onChange={(e) => setWizardScoringAuthority(e.target.value as "ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID")} className="w-full p-2.5 bg-white border border-gray-200 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]">
+									<option value="ADMIN_ONLY">Scoring: Admin only</option>
+									<option value="PLAYER_SELF">Scoring: Player self-scoring</option>
+									<option value="HYBRID">Scoring: Hybrid (Admin + Player)</option>
+								</select>
 								<label className="text-[10px] font-black text-gray-500 uppercase tracking-widest flex items-center gap-2">
 									<input type="checkbox" checked={wizardRoundsEnabled} onChange={(e) => setWizardRoundsEnabled(e.target.checked)} />
 									Enable rounds

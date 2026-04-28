@@ -9,6 +9,11 @@ const eventGameSchema = new Schema(
     joinToken: { type: String, required: true, unique: true, index: true },
     adminToken: { type: String, unique: true, sparse: true, index: true },
     settings: {
+      scoringAuthority: {
+        type: String,
+        enum: ["ADMIN_ONLY", "PLAYER_SELF", "HYBRID"],
+        default: "ADMIN_ONLY"
+      },
       allowNegativeScores: { type: Boolean, default: false },
       maxEntriesPerPlayer: { type: Number },
       roundsEnabled: { type: Boolean, default: false },

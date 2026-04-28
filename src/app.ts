@@ -94,6 +94,7 @@ const createEventGameSchema = z.object({
   title: z.string().optional(),
   settings: z
     .object({
+      scoringAuthority: z.enum(["ADMIN_ONLY", "PLAYER_SELF", "HYBRID"]).optional(),
       allowNegativeScores: z.boolean().optional(),
       maxEntriesPerPlayer: z.number().int().positive().optional(),
       roundsEnabled: z.boolean().optional(),
@@ -108,6 +109,7 @@ const updateEventGameSchema = z
     title: z.string().optional(),
     settings: z
       .object({
+        scoringAuthority: z.enum(["ADMIN_ONLY", "PLAYER_SELF", "HYBRID"]).nullable().optional(),
         allowNegativeScores: z.boolean().optional(),
         maxEntriesPerPlayer: z.number().int().positive().nullable().optional(),
         roundsEnabled: z.boolean().optional(),
@@ -412,7 +414,7 @@ async function createScoreEntryForEventGame(payload: z.infer<typeof scoreSchema>
     throw new AppError(404, "Event not found");
   }
 
-  const scoringAuthority = event.scoringAuthority ?? "ADMIN_ONLY";
+  const scoringAuthority = eventGame.settings?.scoringAuthority ?? event.scoringAuthority ?? "ADMIN_ONLY";
 
   if (actor.actorType === "PLAYER") {
     if (!actor.playerId || actor.playerId !== payload.playerId) {
@@ -835,6 +837,7 @@ app.patch(
     const updates: {
       title?: string;
       settings?: {
+        scoringAuthority?: "ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID" | null;
         allowNegativeScores?: boolean;
         maxEntriesPerPlayer?: number | null;
         roundsEnabled?: boolean;
@@ -849,6 +852,7 @@ app.patch(
 
     if (payload.settings) {
       updates.settings = {
+        scoringAuthority: payload.settings.scoringAuthority ?? null,
         allowNegativeScores: payload.settings.allowNegativeScores,
         maxEntriesPerPlayer: payload.settings.maxEntriesPerPlayer ?? null,
         roundsEnabled: payload.settings.roundsEnabled,
@@ -935,6 +939,7 @@ app.get(
         title: eventGame.title,
         joinToken: eventGame.joinToken,
         settings: {
+          scoringAuthority: eventGame.settings?.scoringAuthority ?? event?.scoringAuthority ?? "ADMIN_ONLY",
           roundsEnabled: eventGame.settings?.roundsEnabled ?? false,
           totalRounds: eventGame.settings?.totalRounds,
           maxPointsPerRound: eventGame.settings?.maxPointsPerRound
@@ -942,7 +947,7 @@ app.get(
         event: event ? { _id: String(event._id), name: event.name } : null,
         location: location ? { _id: String(location._id), name: location.name } : null,
         game: game ? { _id: String(game._id), name: game.name, scoreUnit: game.scoreUnit } : null,
-        scoringAuthority: event?.scoringAuthority ?? "ADMIN_ONLY"
+        scoringAuthority: eventGame.settings?.scoringAuthority ?? event?.scoringAuthority ?? "ADMIN_ONLY"
       }
     });
   })
