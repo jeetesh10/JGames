@@ -1284,6 +1284,7 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 	const [manageBusy, setManageBusy] = useState(false);
 	const [manageError, setManageError] = useState<string | null>(null);
 	const [manageMessage, setManageMessage] = useState<string | null>(null);
+	const [manageSection, setManageSection] = useState<"locations" | "games" | "deploy">("locations");
 	const [newLocationName, setNewLocationName] = useState("");
 	const [newLocationVenue, setNewLocationVenue] = useState("");
 	const [bulkLocationInput, setBulkLocationInput] = useState("");
@@ -1357,6 +1358,12 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 	useEffect(() => {
 		setLocalGames(games);
 	}, [games]);
+
+	useEffect(() => {
+		if (quickSetupOpen) {
+			setManageSection("locations");
+		}
+	}, [quickSetupOpen]);
 
 	useEffect(() => { void loadContext(); }, [eventId]);
 	useEffect(() => { void applyFilters(); }, [leaderboard, eventGames, detailLocFilter, detailGameFilter]);
@@ -1936,104 +1943,130 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 							{manageMessage && <p className="mb-3 text-[11px] font-bold text-green-700 bg-green-50 border border-green-100 rounded-lg px-2 py-1.5">{manageMessage}</p>}
 							{manageError && <p className="mb-3 text-[11px] font-bold text-[#E31837] bg-red-50 border border-red-100 rounded-lg px-2 py-1.5">{manageError}</p>}
 
-							<div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
-								<form onSubmit={(event) => { void addLocation(event); }} className="space-y-2 border border-gray-100 rounded-xl p-3">
-									<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">1) Create Location</p>
-									<input value={newLocationName} onChange={(event) => setNewLocationName(event.target.value)} placeholder="Location name" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
-									<input value={newLocationVenue} onChange={(event) => setNewLocationVenue(event.target.value)} placeholder="Venue (optional)" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
-									<button disabled={manageBusy} className="w-full py-2 rounded-xl bg-[#005696] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#004477] disabled:opacity-60">Add Location</button>
-								</form>
+							<div className="space-y-3">
+								<div className="grid grid-cols-3 gap-2 rounded-xl bg-gray-100 p-1">
+									<button type="button" onClick={() => setManageSection("locations")} className={`py-2 text-[10px] font-black uppercase tracking-widest rounded-lg transition-colors ${manageSection === "locations" ? "bg-white text-[#005696] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>Locations</button>
+									<button type="button" onClick={() => setManageSection("games")} className={`py-2 text-[10px] font-black uppercase tracking-widest rounded-lg transition-colors ${manageSection === "games" ? "bg-white text-[#005696] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>Games</button>
+									<button type="button" onClick={() => setManageSection("deploy")} className={`py-2 text-[10px] font-black uppercase tracking-widest rounded-lg transition-colors ${manageSection === "deploy" ? "bg-white text-[#E31837] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>Deploy</button>
+								</div>
 
-								<form onSubmit={(event) => { void addMultipleLocations(event); }} className="space-y-2 border border-gray-100 rounded-xl p-3">
-									<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">2) Add Multiple Locations</p>
-									<textarea value={bulkLocationInput} onChange={(event) => setBulkLocationInput(event.target.value)} rows={4} placeholder="One location per line" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
-									<button disabled={manageBusy} className="w-full py-2 rounded-xl bg-[#005696] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#004477] disabled:opacity-60">Add All Locations</button>
-								</form>
+								<div className="max-h-[62vh] overflow-y-auto pr-1">
+									{manageSection === "locations" && (
+										<div className="space-y-3">
+											<form onSubmit={(event) => { void addLocation(event); }} className="space-y-2 border border-gray-100 rounded-xl p-3">
+												<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Create Location</p>
+												<input value={newLocationName} onChange={(event) => setNewLocationName(event.target.value)} placeholder="Location name" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+												<input value={newLocationVenue} onChange={(event) => setNewLocationVenue(event.target.value)} placeholder="Venue (optional)" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+												<button disabled={manageBusy} className="w-full py-2 rounded-xl bg-[#005696] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#004477] disabled:opacity-60">Add Location</button>
+											</form>
 
-								<form onSubmit={(event) => { void importTemplateLocations(event); }} className="space-y-2 border border-gray-100 rounded-xl p-3">
-									<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">3) Reuse Existing Locations</p>
-									<div className="max-h-36 overflow-y-auto space-y-1 border border-gray-100 rounded-lg p-2">
-										{allLocations.filter((entry) => entry.eventId !== eventId).map((entry) => {
-											const checked = selectedTemplateLocationIds.includes(entry._id);
-											const sourceEvent = events.find((ev) => ev._id === entry.eventId)?.name ?? "Another event";
-											return (
-												<label key={entry._id} className="flex items-start gap-2 text-xs font-bold text-gray-600">
-													<input
-														type="checkbox"
-														checked={checked}
-														onChange={(event) => {
-															setSelectedTemplateLocationIds((prev) => event.target.checked ? [...prev, entry._id] : prev.filter((id) => id !== entry._id));
-														}}
-													/>
-													<span>{entry.name} <span className="text-gray-400">({sourceEvent})</span></span>
-												</label>
-											);
-										})}
-									</div>
-									<button disabled={manageBusy} className="w-full py-2 rounded-xl bg-[#005696] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#004477] disabled:opacity-60">Import Selected Templates</button>
-								</form>
+											<details className="border border-gray-100 rounded-xl p-3">
+												<summary className="cursor-pointer list-none flex items-center justify-between text-[10px] font-black text-gray-500 uppercase tracking-widest">
+													<span>Advanced Location Tools</span>
+													<span>Expand</span>
+												</summary>
+												<div className="mt-3 space-y-3">
+													<form onSubmit={(event) => { void addMultipleLocations(event); }} className="space-y-2">
+														<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Bulk Add</p>
+														<textarea value={bulkLocationInput} onChange={(event) => setBulkLocationInput(event.target.value)} rows={4} placeholder="One location per line" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+														<button disabled={manageBusy} className="w-full py-2 rounded-xl bg-[#005696] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#004477] disabled:opacity-60">Add All Locations</button>
+													</form>
 
-								<form onSubmit={(event) => { void addGame(event); }} className="space-y-2 border border-gray-100 rounded-xl p-3">
-									<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">4) Create Game</p>
-									<input value={newGameName} onChange={(event) => setNewGameName(event.target.value)} placeholder="Game name" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
-									<input value={newGameScoreUnit} onChange={(event) => setNewGameScoreUnit(event.target.value)} placeholder="Score unit (points)" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
-									<button disabled={manageBusy} className="w-full py-2 rounded-xl bg-[#005696] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#004477] disabled:opacity-60">Create Game</button>
-								</form>
+													<form onSubmit={(event) => { void importTemplateLocations(event); }} className="space-y-2">
+														<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Import Templates</p>
+														<div className="max-h-36 overflow-y-auto space-y-1 border border-gray-100 rounded-lg p-2">
+															{allLocations.filter((entry) => entry.eventId !== eventId).map((entry) => {
+																const checked = selectedTemplateLocationIds.includes(entry._id);
+																const sourceEvent = events.find((ev) => ev._id === entry.eventId)?.name ?? "Another event";
+																return (
+																	<label key={entry._id} className="flex items-start gap-2 text-xs font-bold text-gray-600">
+																		<input
+																			type="checkbox"
+																			checked={checked}
+																			onChange={(event) => {
+																				setSelectedTemplateLocationIds((prev) => event.target.checked ? [...prev, entry._id] : prev.filter((id) => id !== entry._id));
+																			}}
+																		/>
+																		<span>{entry.name} <span className="text-gray-400">({sourceEvent})</span></span>
+																	</label>
+																);
+															})}
+														</div>
+														<button disabled={manageBusy} className="w-full py-2 rounded-xl bg-[#005696] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#004477] disabled:opacity-60">Import Selected Templates</button>
+													</form>
+												</div>
+											</details>
+										</div>
+									)}
 
-								<form onSubmit={(event) => { void saveGameEdits(event); }} className="space-y-2 border border-gray-100 rounded-xl p-3">
-									<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">5) Edit Existing Game</p>
-									<select value={editGameId} onChange={(event) => {
-										const target = localGames.find((entry) => entry._id === event.target.value);
-										setEditGameId(event.target.value);
-										setEditGameName(target?.name ?? "");
-										setEditGameScoreUnit(target?.scoreUnit ?? "points");
-										setEditGameScoringMode(target?.scoringMode ?? "INDIVIDUAL");
-									}} className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]">
-										<option value="">Select game</option>
-										{localGames.map((game) => <option key={game._id} value={game._id}>{game.name}</option>)}
-									</select>
-									<input value={editGameName} onChange={(event) => setEditGameName(event.target.value)} placeholder="Game name" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
-									<select value={editGameScoringMode} onChange={(event) => setEditGameScoringMode(event.target.value as "INDIVIDUAL" | "CUMULATIVE")} className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]">
-										<option value="INDIVIDUAL">INDIVIDUAL</option>
-										<option value="CUMULATIVE">CUMULATIVE</option>
-									</select>
-									<input value={editGameScoreUnit} onChange={(event) => setEditGameScoreUnit(event.target.value)} placeholder="Score unit" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
-									<button disabled={manageBusy} className="w-full py-2 rounded-xl bg-[#005696] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#004477] disabled:opacity-60">Save Game Changes</button>
-								</form>
+									{manageSection === "games" && (
+										<div className="space-y-3">
+											<form onSubmit={(event) => { void addGame(event); }} className="space-y-2 border border-gray-100 rounded-xl p-3">
+												<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Create Game</p>
+												<input value={newGameName} onChange={(event) => setNewGameName(event.target.value)} placeholder="Game name" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+												<input value={newGameScoreUnit} onChange={(event) => setNewGameScoreUnit(event.target.value)} placeholder="Score unit (points)" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+												<button disabled={manageBusy} className="w-full py-2 rounded-xl bg-[#005696] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#004477] disabled:opacity-60">Create Game</button>
+											</form>
 
-								<form onSubmit={(event) => { void deployGameToLocation(event); }} className="space-y-2 border border-gray-100 rounded-xl p-3">
-									<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">6) Deploy Multiple Games To One Location</p>
-									<select value={deployLocationId} onChange={(event) => setDeployLocationId(event.target.value)} className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]">
-										<option value="">Select location</option>
-										{locations.map((location) => <option key={location._id} value={location._id}>{location.name}</option>)}
-									</select>
-									<select value={deployScoringAuthority} onChange={(event) => setDeployScoringAuthority(event.target.value as "ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID")} className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]">
-										<option value="ADMIN_ONLY">Scoring: Admin only</option>
-										<option value="PLAYER_SELF">Scoring: Player self-scoring</option>
-										<option value="HYBRID">Scoring: Hybrid (Admin + Player)</option>
-									</select>
-									<div className="max-h-36 overflow-y-auto space-y-1 border border-gray-100 rounded-lg p-2">
-										{localGames.map((game) => (
-											<label key={game._id} className="flex items-center gap-2 text-xs font-bold text-gray-600">
-												<input
-													type="checkbox"
-													checked={selectedDeployGameIds.includes(game._id)}
-													onChange={(event) => {
-														setSelectedDeployGameIds((prev) => event.target.checked ? [...prev, game._id] : prev.filter((id) => id !== game._id));
-													}}
-												/>
-												<span>{game.name}</span>
+											<form onSubmit={(event) => { void saveGameEdits(event); }} className="space-y-2 border border-gray-100 rounded-xl p-3">
+												<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Edit Existing Game</p>
+												<select value={editGameId} onChange={(event) => {
+													const target = localGames.find((entry) => entry._id === event.target.value);
+													setEditGameId(event.target.value);
+													setEditGameName(target?.name ?? "");
+													setEditGameScoreUnit(target?.scoreUnit ?? "points");
+													setEditGameScoringMode(target?.scoringMode ?? "INDIVIDUAL");
+												}} className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]">
+													<option value="">Select game</option>
+													{localGames.map((game) => <option key={game._id} value={game._id}>{game.name}</option>)}
+												</select>
+												<input value={editGameName} onChange={(event) => setEditGameName(event.target.value)} placeholder="Game name" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+												<select value={editGameScoringMode} onChange={(event) => setEditGameScoringMode(event.target.value as "INDIVIDUAL" | "CUMULATIVE")} className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]">
+													<option value="INDIVIDUAL">INDIVIDUAL</option>
+													<option value="CUMULATIVE">CUMULATIVE</option>
+												</select>
+												<input value={editGameScoreUnit} onChange={(event) => setEditGameScoreUnit(event.target.value)} placeholder="Score unit" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+												<button disabled={manageBusy} className="w-full py-2 rounded-xl bg-[#005696] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#004477] disabled:opacity-60">Save Game Changes</button>
+											</form>
+										</div>
+									)}
+
+									{manageSection === "deploy" && (
+										<form onSubmit={(event) => { void deployGameToLocation(event); }} className="space-y-2 border border-gray-100 rounded-xl p-3">
+											<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Deploy Selected Games To Location</p>
+											<select value={deployLocationId} onChange={(event) => setDeployLocationId(event.target.value)} className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]">
+												<option value="">Select location</option>
+												{locations.map((location) => <option key={location._id} value={location._id}>{location.name}</option>)}
+											</select>
+											<select value={deployScoringAuthority} onChange={(event) => setDeployScoringAuthority(event.target.value as "ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID")} className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]">
+												<option value="ADMIN_ONLY">Scoring: Admin only</option>
+												<option value="PLAYER_SELF">Scoring: Player self-scoring</option>
+												<option value="HYBRID">Scoring: Hybrid (Admin + Player)</option>
+											</select>
+											<div className="max-h-36 overflow-y-auto space-y-1 border border-gray-100 rounded-lg p-2">
+												{localGames.map((game) => (
+													<label key={game._id} className="flex items-center gap-2 text-xs font-bold text-gray-600">
+														<input
+															type="checkbox"
+															checked={selectedDeployGameIds.includes(game._id)}
+															onChange={(event) => {
+																setSelectedDeployGameIds((prev) => event.target.checked ? [...prev, game._id] : prev.filter((id) => id !== game._id));
+															}}
+														/>
+														<span>{game.name}</span>
+													</label>
+												))}
+											</div>
+											<label className="text-[10px] font-black text-gray-500 uppercase tracking-widest flex items-center gap-2">
+												<input type="checkbox" checked={deployRoundsEnabled} onChange={(event) => setDeployRoundsEnabled(event.target.checked)} />
+												Enable rounds
 											</label>
-										))}
-									</div>
-									<label className="text-[10px] font-black text-gray-500 uppercase tracking-widest flex items-center gap-2">
-										<input type="checkbox" checked={deployRoundsEnabled} onChange={(event) => setDeployRoundsEnabled(event.target.checked)} />
-										Enable rounds
-									</label>
-									<input type="number" min={1} value={deployTotalRounds} onChange={(event) => setDeployTotalRounds(event.target.value)} disabled={!deployRoundsEnabled} placeholder="Total rounds" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837] disabled:opacity-50" />
-									<input type="number" min={1} value={deployMaxPointsPerRound} onChange={(event) => setDeployMaxPointsPerRound(event.target.value)} placeholder="Max points per round" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
-									<button disabled={manageBusy} className="w-full py-2 rounded-xl bg-[#E31837] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#c1142f] disabled:opacity-60">Deploy Selected Games</button>
-								</form>
+											<input type="number" min={1} value={deployTotalRounds} onChange={(event) => setDeployTotalRounds(event.target.value)} disabled={!deployRoundsEnabled} placeholder="Total rounds" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837] disabled:opacity-50" />
+											<input type="number" min={1} value={deployMaxPointsPerRound} onChange={(event) => setDeployMaxPointsPerRound(event.target.value)} placeholder="Max points per round" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+											<button disabled={manageBusy} className="w-full py-2 rounded-xl bg-[#E31837] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#c1142f] disabled:opacity-60">Deploy Selected Games</button>
+										</form>
+									)}
+								</div>
 							</div>
 						</div>
 					</div>
