@@ -10,7 +10,10 @@ const eventGameSchema = new Schema(
     adminToken: { type: String, unique: true, sparse: true, index: true },
     settings: {
       allowNegativeScores: { type: Boolean, default: false },
-      maxEntriesPerPlayer: { type: Number }
+      maxEntriesPerPlayer: { type: Number },
+      roundsEnabled: { type: Boolean, default: false },
+      totalRounds: { type: Number },
+      maxPointsPerRound: { type: Number }
     }
   },
   { timestamps: true }

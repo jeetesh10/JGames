@@ -407,6 +407,11 @@ function PlayerJoinPage() {
 	const [error, setError] = useState<string | null>(null);
 	const [submitting, setSubmitting] = useState(false);
 	const [eventGameId, setEventGameId] = useState<string | null>(null);
+	const [playerId, setPlayerId] = useState<string | null>(null);
+	const [selfPoints, setSelfPoints] = useState("0");
+	const [selfRoundNumber, setSelfRoundNumber] = useState("1");
+	const [selfScoringBusy, setSelfScoringBusy] = useState(false);
+	const [selfScoringStatus, setSelfScoringStatus] = useState<string | null>(null);
 	const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
 	const [loadingBoard, setLoadingBoard] = useState(false);
 
@@ -416,7 +421,9 @@ function PlayerJoinPage() {
 		setError(null);
 		setMetaError(null);
 		setEventGameId(null);
+		setPlayerId(null);
 		setLeaderboard([]);
+		setSelfScoringStatus(null);
 	}, [joinToken]);
 
 	async function loadJoinMeta() {
@@ -466,6 +473,7 @@ function PlayerJoinPage() {
 				body: JSON.stringify(payload),
 			});
 			setEventGameId(result.eventGameId);
+			setPlayerId(result.playerId);
 			setStatus(`${result.displayName}, you are successfully registered for this game.`);
 			await loadLeaderboardForGame(result.eventGameId);
 		} catch (caught) {
@@ -474,6 +482,52 @@ function PlayerJoinPage() {
 			setSubmitting(false);
 		}
 	}
+
+	async function submitSelfScore(event: FormEvent) {
+		event.preventDefault();
+		if (!playerId) {
+			setError("Register first before submitting score");
+			return;
+		}
+
+		const points = Number(selfPoints);
+		if (!Number.isFinite(points)) {
+			setError("Enter a valid points value");
+			return;
+		}
+
+		const roundsEnabled = Boolean(joinMeta?.settings?.roundsEnabled);
+		const roundNumber = Number(selfRoundNumber);
+		if (roundsEnabled && (!Number.isInteger(roundNumber) || roundNumber <= 0)) {
+			setError("Enter a valid round number");
+			return;
+		}
+
+		setSelfScoringBusy(true);
+		setError(null);
+		setSelfScoringStatus(null);
+		try {
+			await apiRequest<ScoreEntryRecord>(`/api/join/${joinToken}/scores`, {
+				method: "POST",
+				body: JSON.stringify({
+					playerId,
+					points,
+					roundNumber: roundsEnabled ? roundNumber : undefined
+				})
+			});
+
+			setSelfScoringStatus("Score submitted successfully");
+			if (eventGameId) {
+				await loadLeaderboardForGame(eventGameId);
+			}
+		} catch (caught) {
+			setError(caught instanceof Error ? caught.message : "Unable to submit score");
+		} finally {
+			setSelfScoringBusy(false);
+		}
+	}
+
+	const canSelfScore = (joinMeta?.scoringAuthority ?? "ADMIN_ONLY") !== "ADMIN_ONLY";
 
 	return (
 		<div className="min-h-screen bg-[#F4F7F9] p-3 sm:p-4 md:p-6">
@@ -529,6 +583,45 @@ function PlayerJoinPage() {
 							{submitting ? "Registering..." : "Register For Game"}
 						</button>
 					</form>
+					{playerId && (
+						<div className="mt-5 rounded-xl border border-gray-100 p-4 bg-gray-50 space-y-3">
+							<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Score Submission</p>
+							{canSelfScore ? (
+								<form onSubmit={(event) => { void submitSelfScore(event); }} className="space-y-3">
+									<div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+										<input
+											type="number"
+											value={selfPoints}
+											onChange={(event) => setSelfPoints(event.target.value)}
+											placeholder="Points"
+											className="w-full p-3 bg-white border border-gray-200 rounded-xl outline-none focus:border-[#005696] font-bold"
+										/>
+										{joinMeta?.settings?.roundsEnabled ? (
+											<input
+												type="number"
+												value={selfRoundNumber}
+												onChange={(event) => setSelfRoundNumber(event.target.value)}
+												min={1}
+												max={joinMeta.settings?.totalRounds}
+												placeholder="Round"
+												className="w-full p-3 bg-white border border-gray-200 rounded-xl outline-none focus:border-[#005696] font-bold"
+											/>
+										) : null}
+									</div>
+									<button
+										type="submit"
+										disabled={selfScoringBusy}
+										className="w-full py-3 rounded-xl bg-[#005696] text-white text-xs font-black uppercase tracking-widest hover:bg-[#004477] disabled:opacity-60"
+									>
+										{selfScoringBusy ? "Submitting..." : "Submit My Score"}
+									</button>
+									{selfScoringStatus && <p className="text-xs font-bold text-green-700">{selfScoringStatus}</p>}
+								</form>
+							) : (
+								<p className="text-xs font-bold text-gray-500">This event is configured for admin-only scoring.</p>
+							)}
+						</div>
+					)}
 					<p className="mt-4 text-[11px] text-gray-400 font-bold">Join token: {joinToken}</p>
 				</section>
 
@@ -1184,6 +1277,9 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 	const [newGameScoreUnit, setNewGameScoreUnit] = useState("points");
 	const [deployLocationId, setDeployLocationId] = useState("");
 	const [deployGameId, setDeployGameId] = useState("");
+	const [deployRoundsEnabled, setDeployRoundsEnabled] = useState(false);
+	const [deployTotalRounds, setDeployTotalRounds] = useState("3");
+	const [deployMaxPointsPerRound, setDeployMaxPointsPerRound] = useState("10");
 	const gameNameById = useMemo(() => new Map(localGames.map((game) => [game._id, game.name])), [localGames]);
 	const mappedGameOptions = useMemo(() => {
 		const seen = new Set<string>();
@@ -1399,7 +1495,12 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 				body: JSON.stringify({
 					eventId,
 					locationId: deployLocationId,
-					gameId: deployGameId
+					gameId: deployGameId,
+					settings: {
+						roundsEnabled: deployRoundsEnabled,
+						totalRounds: deployRoundsEnabled ? Number(deployTotalRounds) : undefined,
+						maxPointsPerRound: Number(deployMaxPointsPerRound) || undefined
+					}
 				})
 			});
 			setEventGames((prev) => [created, ...prev]);
@@ -1720,6 +1821,27 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 									<option value="">Select game</option>
 									{localGames.map((game) => <option key={game._id} value={game._id}>{game.name}</option>)}
 								</select>
+								<label className="text-[10px] font-black text-gray-500 uppercase tracking-widest flex items-center gap-2">
+									<input type="checkbox" checked={deployRoundsEnabled} onChange={(event) => setDeployRoundsEnabled(event.target.checked)} />
+									Enable rounds
+								</label>
+								<input
+									type="number"
+									min={1}
+									value={deployTotalRounds}
+									onChange={(event) => setDeployTotalRounds(event.target.value)}
+									disabled={!deployRoundsEnabled}
+									placeholder="Total rounds"
+									className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837] disabled:opacity-50"
+								/>
+								<input
+									type="number"
+									min={1}
+									value={deployMaxPointsPerRound}
+									onChange={(event) => setDeployMaxPointsPerRound(event.target.value)}
+									placeholder="Max points per round"
+									className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]"
+								/>
 								<button
 									disabled={manageBusy}
 									className="w-full py-2 rounded-xl bg-[#E31837] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#c1142f] disabled:opacity-60"
@@ -2136,6 +2258,7 @@ function WizardModal({ token, events, games, onClose, onComplete }: {
 	const [creatingEvent, setCreatingEvent] = useState(false);
 	const [newEventName, setNewEventName] = useState("");
 	const [newEventDate, setNewEventDate] = useState(new Date().toISOString().slice(0, 10));
+	const [newEventScoringAuthority, setNewEventScoringAuthority] = useState<"ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID">("ADMIN_ONLY");
 
 	const [creatingLocation, setCreatingLocation] = useState(false);
 	const [newLocationName, setNewLocationName] = useState("");
@@ -2144,6 +2267,9 @@ function WizardModal({ token, events, games, onClose, onComplete }: {
 	const [creatingGame, setCreatingGame] = useState(false);
 	const [newGameName, setNewGameName] = useState("");
 	const [newGameScoreUnit, setNewGameScoreUnit] = useState("points");
+	const [wizardRoundsEnabled, setWizardRoundsEnabled] = useState(false);
+	const [wizardTotalRounds, setWizardTotalRounds] = useState("3");
+	const [wizardMaxPointsPerRound, setWizardMaxPointsPerRound] = useState("10");
 
 	async function loadLocations(eventId: string) {
 		const locs = await authed<LocationRecord[]>(`/api/events/${eventId}/locations`, token);
@@ -2160,7 +2286,14 @@ function WizardModal({ token, events, games, onClose, onComplete }: {
 		if (!newEventName.trim()) return;
 		setBusy(true); setError(null);
 		try {
-			const ev = await authed<EventRecord>("/api/events", token, { method: "POST", body: JSON.stringify({ name: newEventName.trim(), eventDate: newEventDate }) });
+			const ev = await authed<EventRecord>("/api/events", token, {
+				method: "POST",
+				body: JSON.stringify({
+					name: newEventName.trim(),
+					eventDate: newEventDate,
+					scoringAuthority: newEventScoringAuthority
+				})
+			});
 			await pickEvent(ev);
 		} catch (err) { setError(err instanceof Error ? err.message : "Failed"); }
 		finally { setBusy(false); }
@@ -2184,7 +2317,19 @@ function WizardModal({ token, events, games, onClose, onComplete }: {
 		setSelectedGame(gm);
 		setBusy(true); setError(null);
 		try {
-			const eg = await authed<EventGameRecord>("/api/event-games", token, { method: "POST", body: JSON.stringify({ eventId: selectedEvent._id, locationId: selectedLocation._id, gameId: gm._id }) });
+			const eg = await authed<EventGameRecord>("/api/event-games", token, {
+				method: "POST",
+				body: JSON.stringify({
+					eventId: selectedEvent._id,
+					locationId: selectedLocation._id,
+					gameId: gm._id,
+					settings: {
+						roundsEnabled: wizardRoundsEnabled,
+						totalRounds: wizardRoundsEnabled ? Number(wizardTotalRounds) : undefined,
+						maxPointsPerRound: Number(wizardMaxPointsPerRound) || undefined
+					}
+				})
+			});
 			const link = await authed<JoinLinkResponse>(`/api/event-games/${eg._id}/join-link`, token);
 			setJoinLink(link);
 			setStep(4);
@@ -2242,6 +2387,11 @@ function WizardModal({ token, events, games, onClose, onComplete }: {
 							<label className="block text-sm font-bold text-gray-700 uppercase">New Event Name</label>
 							<input autoFocus type="text" value={newEventName} onChange={(e) => setNewEventName(e.target.value)} placeholder="e.g. Summer Paw-ty 2026" className="w-full p-4 bg-gray-50 border-2 border-gray-200 rounded-xl focus:border-[#E31837] outline-none font-bold" />
 							<input type="date" value={newEventDate} onChange={(e) => setNewEventDate(e.target.value)} className="w-full p-4 bg-gray-50 border-2 border-gray-200 rounded-xl focus:border-[#E31837] outline-none font-bold" />
+							<select value={newEventScoringAuthority} onChange={(e) => setNewEventScoringAuthority(e.target.value as "ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID")} className="w-full p-4 bg-gray-50 border-2 border-gray-200 rounded-xl focus:border-[#E31837] outline-none font-bold">
+								<option value="ADMIN_ONLY">Scoring: Admin only</option>
+								<option value="PLAYER_SELF">Scoring: Player self-scoring</option>
+								<option value="HYBRID">Scoring: Hybrid (Admin + Player)</option>
+							</select>
 							<div className="flex gap-3 pt-2">
 								<button onClick={() => setCreatingEvent(false)} className="flex-1 py-4 px-6 rounded-xl border-2 border-gray-100 font-bold text-gray-500 hover:bg-gray-50">Cancel</button>
 								<button disabled={!newEventName || busy} onClick={() => { void createEvent(); }} className={`flex-1 py-4 px-6 rounded-xl font-bold text-white ${newEventName && !busy ? "bg-[#E31837]" : "bg-gray-300"}`}>{busy ? "Creating…" : "Continue"}</button>
@@ -2282,6 +2432,14 @@ function WizardModal({ token, events, games, onClose, onComplete }: {
 					{step === 3 && (!creatingGame ? (
 						<div className="space-y-4">
 							<label className="block text-sm font-bold text-gray-700 uppercase tracking-tight">Select Game for <span className="text-[#005696]">{selectedLocation?.name}</span></label>
+							<div className="grid grid-cols-1 sm:grid-cols-3 gap-2 p-3 bg-gray-50 border border-gray-100 rounded-xl">
+								<label className="text-[10px] font-black text-gray-500 uppercase tracking-widest flex items-center gap-2">
+									<input type="checkbox" checked={wizardRoundsEnabled} onChange={(e) => setWizardRoundsEnabled(e.target.checked)} />
+									Enable rounds
+								</label>
+								<input type="number" min={1} value={wizardTotalRounds} onChange={(e) => setWizardTotalRounds(e.target.value)} disabled={!wizardRoundsEnabled} placeholder="Total rounds" className="w-full p-2.5 bg-white border border-gray-200 rounded-xl text-xs font-bold outline-none focus:border-[#E31837] disabled:opacity-50" />
+								<input type="number" min={1} value={wizardMaxPointsPerRound} onChange={(e) => setWizardMaxPointsPerRound(e.target.value)} placeholder="Max points/round" className="w-full p-2.5 bg-white border border-gray-200 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+							</div>
 							<div className="grid gap-3 max-h-64 overflow-y-auto">
 								{games.map((gm) => (
 									<button key={gm._id} onClick={() => { void deploy(gm); }} disabled={busy} className="w-full p-4 border-2 border-gray-100 rounded-xl flex items-center justify-between hover:border-[#E31837] hover:bg-red-50 transition-all text-left disabled:opacity-50">

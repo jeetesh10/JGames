@@ -35,6 +35,7 @@ const createEventSchema = z.object({
   sponsor: z.string().min(2).optional(),
   code: z.string().min(2).max(20).optional(),
   status: z.enum(["DRAFT", "LIVE", "CLOSED"]).optional(),
+  scoringAuthority: z.enum(["ADMIN_ONLY", "PLAYER_SELF", "HYBRID"]).optional(),
   startsAt: z.string().datetime().optional(),
   endsAt: z.string().datetime().optional(),
   metadata: z.record(z.string(), z.unknown()).optional()
@@ -48,6 +49,7 @@ const updateEventSchema = z
     description: z.string().min(2).optional(),
     sponsor: z.string().min(2).optional(),
     status: z.enum(["DRAFT", "LIVE", "CLOSED"]).optional(),
+    scoringAuthority: z.enum(["ADMIN_ONLY", "PLAYER_SELF", "HYBRID"]).optional(),
     startsAt: z.string().datetime().nullable().optional(),
     endsAt: z.string().datetime().nullable().optional()
   })
@@ -93,7 +95,10 @@ const createEventGameSchema = z.object({
   settings: z
     .object({
       allowNegativeScores: z.boolean().optional(),
-      maxEntriesPerPlayer: z.number().int().positive().optional()
+      maxEntriesPerPlayer: z.number().int().positive().optional(),
+      roundsEnabled: z.boolean().optional(),
+      totalRounds: z.number().int().positive().optional(),
+      maxPointsPerRound: z.number().positive().optional()
     })
     .optional()
 });
@@ -104,7 +109,10 @@ const updateEventGameSchema = z
     settings: z
       .object({
         allowNegativeScores: z.boolean().optional(),
-        maxEntriesPerPlayer: z.number().int().positive().nullable().optional()
+        maxEntriesPerPlayer: z.number().int().positive().nullable().optional(),
+        roundsEnabled: z.boolean().optional(),
+        totalRounds: z.number().int().positive().nullable().optional(),
+        maxPointsPerRound: z.number().positive().nullable().optional()
       })
       .optional()
   })
@@ -134,8 +142,21 @@ const scoreSchema = z.object({
   eventGameId: z.string(),
   playerId: z.string(),
   points: z.number(),
-  source: z.enum(["MANUAL", "AUTO"]).optional()
+  roundNumber: z.number().int().positive().optional(),
+  source: z.enum(["MANUAL", "AUTO", "SELF"]).optional()
 });
+
+const joinScoreSchema = z.object({
+  playerId: z.string(),
+  points: z.number(),
+  roundNumber: z.number().int().positive().optional(),
+  source: z.enum(["MANUAL", "AUTO", "SELF"]).optional()
+});
+
+type ScoreActorContext = {
+  actorType: "ADMIN" | "GAME_ADMIN" | "PLAYER";
+  playerId?: string;
+};
 
 const stressScenarioSchema = z
   .object({
@@ -373,7 +394,7 @@ async function buildEventGameParticipantsPayload(eventGameId: ReturnType<typeof 
   };
 }
 
-async function createScoreEntryForEventGame(payload: z.infer<typeof scoreSchema>) {
+async function createScoreEntryForEventGame(payload: z.infer<typeof scoreSchema>, actor: ScoreActorContext) {
   const eventGameId = asObjectId(payload.eventGameId);
   const playerId = asObjectId(payload.playerId);
 
@@ -386,6 +407,27 @@ async function createScoreEntryForEventGame(payload: z.infer<typeof scoreSchema>
     throw new AppError(404, "Event game not found");
   }
 
+  const event = await EventModel.findById(eventGame.eventId).lean();
+  if (!event) {
+    throw new AppError(404, "Event not found");
+  }
+
+  const scoringAuthority = event.scoringAuthority ?? "ADMIN_ONLY";
+
+  if (actor.actorType === "PLAYER") {
+    if (!actor.playerId || actor.playerId !== payload.playerId) {
+      throw new AppError(403, "Players can only submit scores for themselves");
+    }
+  }
+
+  if (scoringAuthority === "ADMIN_ONLY" && actor.actorType === "PLAYER") {
+    throw new AppError(403, "This event allows score submission by admins only");
+  }
+
+  if (scoringAuthority === "PLAYER_SELF" && actor.actorType !== "PLAYER") {
+    throw new AppError(403, "This event allows score submission by players only");
+  }
+
   if (!participation) {
     throw new AppError(409, "Player must join this game before score submission");
   }
@@ -393,6 +435,35 @@ async function createScoreEntryForEventGame(payload: z.infer<typeof scoreSchema>
   const allowNegative = eventGame.settings?.allowNegativeScores ?? false;
   if (!allowNegative && payload.points < 0) {
     throw new AppError(400, "Negative scores are not allowed for this game");
+  }
+
+  const roundsEnabled = eventGame.settings?.roundsEnabled ?? false;
+  const totalRounds = eventGame.settings?.totalRounds;
+  const maxPointsPerRound = eventGame.settings?.maxPointsPerRound;
+
+  if (roundsEnabled) {
+    if (!payload.roundNumber) {
+      throw new AppError(400, "roundNumber is required for multi-round games");
+    }
+
+    if (totalRounds && payload.roundNumber > totalRounds) {
+      throw new AppError(400, `roundNumber cannot exceed configured total rounds (${totalRounds})`);
+    }
+
+    const alreadyScoredRound = await ScoreEntryModel.exists({
+      eventGameId,
+      playerId,
+      roundNumber: payload.roundNumber
+    });
+    if (alreadyScoredRound) {
+      throw new AppError(409, `Score already submitted for round ${payload.roundNumber}`);
+    }
+  } else if (payload.roundNumber !== undefined) {
+    throw new AppError(400, "roundNumber is only allowed for games configured with rounds");
+  }
+
+  if (maxPointsPerRound != null && payload.points > maxPointsPerRound) {
+    throw new AppError(400, `points cannot exceed configured maxPointsPerRound (${maxPointsPerRound})`);
   }
 
   const maxEntries = eventGame.settings?.maxEntriesPerPlayer;
@@ -410,7 +481,8 @@ async function createScoreEntryForEventGame(payload: z.infer<typeof scoreSchema>
     gameId: eventGame.gameId,
     playerId,
     points: payload.points,
-    source: payload.source ?? "MANUAL"
+    roundNumber: payload.roundNumber,
+    source: actor.actorType === "PLAYER" ? "SELF" : (payload.source ?? "MANUAL")
   });
 
   return score;
@@ -755,6 +827,9 @@ app.patch(
       settings?: {
         allowNegativeScores?: boolean;
         maxEntriesPerPlayer?: number | null;
+        roundsEnabled?: boolean;
+        totalRounds?: number | null;
+        maxPointsPerRound?: number | null;
       };
     } = {};
 
@@ -765,7 +840,10 @@ app.patch(
     if (payload.settings) {
       updates.settings = {
         allowNegativeScores: payload.settings.allowNegativeScores,
-        maxEntriesPerPlayer: payload.settings.maxEntriesPerPlayer ?? null
+        maxEntriesPerPlayer: payload.settings.maxEntriesPerPlayer ?? null,
+        roundsEnabled: payload.settings.roundsEnabled,
+        totalRounds: payload.settings.totalRounds ?? null,
+        maxPointsPerRound: payload.settings.maxPointsPerRound ?? null
       };
     }
 
@@ -846,9 +924,15 @@ app.get(
         _id: String(eventGame._id),
         title: eventGame.title,
         joinToken: eventGame.joinToken,
+        settings: {
+          roundsEnabled: eventGame.settings?.roundsEnabled ?? false,
+          totalRounds: eventGame.settings?.totalRounds,
+          maxPointsPerRound: eventGame.settings?.maxPointsPerRound
+        },
         event: event ? { _id: String(event._id), name: event.name } : null,
         location: location ? { _id: String(location._id), name: location.name } : null,
-        game: game ? { _id: String(game._id), name: game.name, scoreUnit: game.scoreUnit } : null
+        game: game ? { _id: String(game._id), name: game.name, scoreUnit: game.scoreUnit } : null,
+        scoringAuthority: event?.scoringAuthority ?? "ADMIN_ONLY"
       }
     });
   })
@@ -912,6 +996,32 @@ app.post(
   })
 );
 
+app.post(
+  "/api/join/:joinToken/scores",
+  asyncHandler(async (req, res) => {
+    const joinToken = routeParam(req.params.joinToken);
+    const payload = parseOrThrow(joinScoreSchema, req.body);
+
+    const eventGame = await EventGameModel.findOne({ joinToken }).lean();
+    if (!eventGame) {
+      throw new AppError(404, "Join token not found");
+    }
+
+    const score = await createScoreEntryForEventGame(
+      {
+        ...payload,
+        eventGameId: String(eventGame._id)
+      },
+      {
+        actorType: "PLAYER",
+        playerId: payload.playerId
+      }
+    );
+
+    res.status(201).json(score);
+  })
+);
+
 app.get(
   "/api/event-games/:eventGameId/participants",
   requireAuth,
@@ -953,7 +1063,26 @@ app.post(
   requireRole(["ADMIN"]),
   asyncHandler(async (req, res) => {
     const payload = parseOrThrow(scoreSchema, req.body);
-    const score = await createScoreEntryForEventGame(payload);
+    const score = await createScoreEntryForEventGame(payload, { actorType: "ADMIN" });
+
+    res.status(201).json(score);
+  })
+);
+
+app.post(
+  "/api/player/scores",
+  requireAuth,
+  requireRole(["PLAYER"]),
+  asyncHandler(async (req, res) => {
+    if (!req.auth?.playerId) {
+      throw new AppError(400, "No player profile linked. Register player account first.");
+    }
+
+    const payload = parseOrThrow(scoreSchema, req.body);
+    const score = await createScoreEntryForEventGame(payload, {
+      actorType: "PLAYER",
+      playerId: req.auth.playerId
+    });
 
     res.status(201).json(score);
   })
@@ -979,7 +1108,7 @@ app.post(
       throw new AppError(403, "Invalid game admin token");
     }
 
-    const score = await createScoreEntryForEventGame(payload);
+    const score = await createScoreEntryForEventGame(payload, { actorType: "GAME_ADMIN" });
 
     res.status(201).json(score);
   })

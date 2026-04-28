@@ -6,6 +6,7 @@ export interface EventRecord {
   description: string;
   sponsor?: string;
   status: "DRAFT" | "LIVE" | "CLOSED";
+  scoringAuthority: "ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID";
   startsAt?: string;
   endsAt?: string;
 }
@@ -36,6 +37,9 @@ export interface EventGameRecord {
   settings?: {
     allowNegativeScores?: boolean;
     maxEntriesPerPlayer?: number;
+    roundsEnabled?: boolean;
+    totalRounds?: number;
+    maxPointsPerRound?: number;
   };
 }
 
@@ -62,6 +66,12 @@ export interface JoinTokenMetaResponse {
     _id: string;
     title?: string;
     joinToken: string;
+    settings?: {
+      roundsEnabled?: boolean;
+      totalRounds?: number;
+      maxPointsPerRound?: number;
+    };
+    scoringAuthority?: "ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID";
     event: { _id: string; name: string } | null;
     location: { _id: string; name: string } | null;
     game: { _id: string; name: string; scoreUnit: string } | null;
@@ -138,7 +148,8 @@ export interface ScoreEntryRecord {
   gameId: string;
   playerId: string;
   points: number;
-  source: "MANUAL" | "AUTO";
+  roundNumber?: number;
+  source: "MANUAL" | "AUTO" | "SELF";
 }
 
 export interface StressScenarioRequest {

@@ -12,6 +12,11 @@ const eventSchema = new Schema(
       enum: ["DRAFT", "LIVE", "CLOSED"],
       default: "DRAFT"
     },
+    scoringAuthority: {
+      type: String,
+      enum: ["ADMIN_ONLY", "PLAYER_SELF", "HYBRID"],
+      default: "ADMIN_ONLY"
+    },
     startsAt: { type: Date },
     endsAt: { type: Date },
     metadata: { type: Schema.Types.Mixed }
