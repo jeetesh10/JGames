@@ -1284,12 +1284,20 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 	const [manageBusy, setManageBusy] = useState(false);
 	const [manageError, setManageError] = useState<string | null>(null);
 	const [manageMessage, setManageMessage] = useState<string | null>(null);
+	const [eventScoringAuthority, setEventScoringAuthority] = useState<"ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID">("ADMIN_ONLY");
 	const [newLocationName, setNewLocationName] = useState("");
 	const [newLocationVenue, setNewLocationVenue] = useState("");
+	const [bulkLocationInput, setBulkLocationInput] = useState("");
+	const [allLocations, setAllLocations] = useState<LocationRecord[]>([]);
+	const [selectedTemplateLocationIds, setSelectedTemplateLocationIds] = useState<string[]>([]);
 	const [newGameName, setNewGameName] = useState("");
 	const [newGameScoreUnit, setNewGameScoreUnit] = useState("points");
+	const [editGameId, setEditGameId] = useState("");
+	const [editGameName, setEditGameName] = useState("");
+	const [editGameScoreUnit, setEditGameScoreUnit] = useState("points");
+	const [editGameScoringMode, setEditGameScoringMode] = useState<"INDIVIDUAL" | "CUMULATIVE">("INDIVIDUAL");
 	const [deployLocationId, setDeployLocationId] = useState("");
-	const [deployGameId, setDeployGameId] = useState("");
+	const [selectedDeployGameIds, setSelectedDeployGameIds] = useState<string[]>([]);
 	const [deployRoundsEnabled, setDeployRoundsEnabled] = useState(false);
 	const [deployTotalRounds, setDeployTotalRounds] = useState("3");
 	const [deployMaxPointsPerRound, setDeployMaxPointsPerRound] = useState("10");
@@ -1350,6 +1358,12 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 		setLocalGames(games);
 	}, [games]);
 
+	useEffect(() => {
+		if (selectedEvent?.scoringAuthority) {
+			setEventScoringAuthority(selectedEvent.scoringAuthority);
+		}
+	}, [selectedEvent?.scoringAuthority]);
+
 	useEffect(() => { void loadContext(); }, [eventId]);
 	useEffect(() => { void applyFilters(); }, [leaderboard, eventGames, detailLocFilter, detailGameFilter]);
 
@@ -1372,10 +1386,18 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 	}, [locations, deployLocationId]);
 
 	useEffect(() => {
-		if (!deployGameId || !localGames.some((entry) => entry._id === deployGameId)) {
-			setDeployGameId(localGames[0]?._id ?? "");
+		setSelectedDeployGameIds((prev) => prev.filter((id) => localGames.some((entry) => entry._id === id)));
+	}, [localGames]);
+
+	useEffect(() => {
+		if (!editGameId || !localGames.some((entry) => entry._id === editGameId)) {
+			const firstGame = localGames[0];
+			setEditGameId(firstGame?._id ?? "");
+			setEditGameName(firstGame?.name ?? "");
+			setEditGameScoreUnit(firstGame?.scoreUnit ?? "points");
+			setEditGameScoringMode(firstGame?.scoringMode ?? "INDIVIDUAL");
 		}
-	}, [localGames, deployGameId]);
+	}, [localGames, editGameId]);
 
 	async function loadContext() {
 		setBusy(true);
@@ -1404,6 +1426,36 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 			})();
 		} finally {
 			setBusy(false);
+		}
+	}
+
+	useEffect(() => {
+		if (!quickSetupOpen) return;
+		void (async () => {
+			try {
+				const all = await authed<LocationRecord[]>("/api/locations", token);
+				setAllLocations(all);
+			} catch {
+				setAllLocations([]);
+			}
+		})();
+	}, [quickSetupOpen, token]);
+
+	async function saveEventScoringAuthority() {
+		setManageBusy(true);
+		setManageError(null);
+		setManageMessage(null);
+		try {
+			await authed<EventRecord>(`/api/events/${eventId}`, token, {
+				method: "PATCH",
+				body: JSON.stringify({ scoringAuthority: eventScoringAuthority })
+			});
+			setManageMessage("Event scoring mode updated");
+			void onReload();
+		} catch (caught) {
+			setManageError(caught instanceof Error ? caught.message : "Unable to update scoring mode");
+		} finally {
+			setManageBusy(false);
 		}
 	}
 
@@ -1448,6 +1500,83 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 		}
 	}
 
+	async function addMultipleLocations(event: FormEvent) {
+		event.preventDefault();
+		const names = bulkLocationInput
+			.split("\n")
+			.map((entry) => entry.trim())
+			.filter(Boolean);
+
+		if (names.length === 0) {
+			setManageError("Add at least one location name (one per line)");
+			return;
+		}
+
+		setManageBusy(true);
+		setManageError(null);
+		setManageMessage(null);
+		try {
+			const created = await Promise.all(
+				names.map((name) =>
+					authed<LocationRecord>(`/api/events/${eventId}/locations`, token, {
+						method: "POST",
+						body: JSON.stringify({ name })
+					})
+				)
+			);
+
+			setLocations((prev) => [...created, ...prev]);
+			setBulkLocationInput("");
+			setManageMessage(`${created.length} location(s) added`);
+		} catch (caught) {
+			setManageError(caught instanceof Error ? caught.message : "Unable to add locations");
+		} finally {
+			setManageBusy(false);
+		}
+	}
+
+	async function importTemplateLocations(event: FormEvent) {
+		event.preventDefault();
+		if (selectedTemplateLocationIds.length === 0) {
+			setManageError("Select at least one location template to import");
+			return;
+		}
+
+		const existingNames = new Set(locations.map((entry) => entry.name.toLowerCase()));
+		const templates = allLocations.filter((entry) => selectedTemplateLocationIds.includes(entry._id));
+		const toCreate = templates.filter((entry) => !existingNames.has(entry.name.toLowerCase()));
+
+		if (toCreate.length === 0) {
+			setManageError("All selected templates already exist in this event");
+			return;
+		}
+
+		setManageBusy(true);
+		setManageError(null);
+		setManageMessage(null);
+		try {
+			const created = await Promise.all(
+				toCreate.map((template) =>
+					authed<LocationRecord>(`/api/events/${eventId}/locations`, token, {
+						method: "POST",
+						body: JSON.stringify({
+							name: template.name,
+							venue: template.venue
+						})
+					})
+				)
+			);
+
+			setLocations((prev) => [...created, ...prev]);
+			setSelectedTemplateLocationIds([]);
+			setManageMessage(`${created.length} location template(s) imported`);
+		} catch (caught) {
+			setManageError(caught instanceof Error ? caught.message : "Unable to import templates");
+		} finally {
+			setManageBusy(false);
+		}
+	}
+
 	async function addGame(event: FormEvent) {
 		event.preventDefault();
 		if (!newGameName.trim()) {
@@ -1474,7 +1603,7 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 				})
 			});
 			setLocalGames((prev) => [created, ...prev]);
-			setDeployGameId(created._id);
+			setSelectedDeployGameIds((prev) => [...new Set([created._id, ...prev])]);
 			setNewGameName("");
 			setNewGameScoreUnit("points");
 			setManageMessage(`Game created: ${created.name}`);
@@ -1486,16 +1615,15 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 		}
 	}
 
-	async function deployGameToLocation(event: FormEvent) {
+	async function saveGameEdits(event: FormEvent) {
 		event.preventDefault();
-		if (!deployLocationId || !deployGameId) {
-			setManageError("Choose both a location and a game to deploy");
+		if (!editGameId) {
+			setManageError("Select a game to edit");
 			return;
 		}
 
-		const alreadyMapped = eventGames.some((entry) => entry.locationId === deployLocationId && entry.gameId === deployGameId);
-		if (alreadyMapped) {
-			setManageError("This game is already deployed to that location");
+		if (!editGameName.trim()) {
+			setManageError("Game name is required");
 			return;
 		}
 
@@ -1503,22 +1631,73 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 		setManageError(null);
 		setManageMessage(null);
 		try {
-			const created = await authed<EventGameRecord>("/api/event-games", token, {
-				method: "POST",
+			const key = editGameName.trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+			const updated = await authed<GameRecord>(`/api/games/${editGameId}`, token, {
+				method: "PATCH",
 				body: JSON.stringify({
-					eventId,
-					locationId: deployLocationId,
-					gameId: deployGameId,
-					settings: {
-						roundsEnabled: deployRoundsEnabled,
-						totalRounds: deployRoundsEnabled ? Number(deployTotalRounds) : undefined,
-						maxPointsPerRound: Number(deployMaxPointsPerRound) || undefined
-					}
+					name: editGameName.trim(),
+					key,
+					scoringMode: editGameScoringMode,
+					scoreUnit: editGameScoreUnit.trim() || "points"
 				})
 			});
-			setEventGames((prev) => [created, ...prev]);
-			setJoinLinks((prev) => ({ ...prev, [created._id]: buildClientJoinLink(created._id, created.joinToken) }));
-			setManageMessage("Game deployed to location");
+
+			setLocalGames((prev) => prev.map((entry) => (entry._id === editGameId ? updated : entry)));
+			setManageMessage(`Game updated: ${updated.name}`);
+			void onReload();
+		} catch (caught) {
+			setManageError(caught instanceof Error ? caught.message : "Unable to update game");
+		} finally {
+			setManageBusy(false);
+		}
+	}
+
+	async function deployGameToLocation(event: FormEvent) {
+		event.preventDefault();
+		if (!deployLocationId || selectedDeployGameIds.length === 0) {
+			setManageError("Choose a location and at least one game to deploy");
+			return;
+		}
+
+		setManageBusy(true);
+		setManageError(null);
+		setManageMessage(null);
+		try {
+			const pendingGameIds = selectedDeployGameIds.filter((gameId) => !eventGames.some((entry) => entry.locationId === deployLocationId && entry.gameId === gameId));
+
+			if (pendingGameIds.length === 0) {
+				setManageError("Selected games are already deployed to this location");
+				return;
+			}
+
+			const created = await Promise.all(
+				pendingGameIds.map((gameId) =>
+					authed<EventGameRecord>("/api/event-games", token, {
+						method: "POST",
+						body: JSON.stringify({
+							eventId,
+							locationId: deployLocationId,
+							gameId,
+							settings: {
+								roundsEnabled: deployRoundsEnabled,
+								totalRounds: deployRoundsEnabled ? Number(deployTotalRounds) : undefined,
+								maxPointsPerRound: Number(deployMaxPointsPerRound) || undefined
+							}
+						})
+					})
+				)
+			);
+
+			setEventGames((prev) => [...created, ...prev]);
+			setJoinLinks((prev) => {
+				const next = { ...prev };
+				for (const item of created) {
+					next[item._id] = buildClientJoinLink(item._id, item.joinToken);
+				}
+				return next;
+			});
+			setSelectedDeployGameIds([]);
+			setManageMessage(`${created.length} game(s) deployed to location`);
 			void onReload();
 		} catch (caught) {
 			setManageError(caught instanceof Error ? caught.message : "Unable to deploy game");
@@ -1780,88 +1959,110 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 							{manageMessage && <p className="mb-3 text-[11px] font-bold text-green-700 bg-green-50 border border-green-100 rounded-lg px-2 py-1.5">{manageMessage}</p>}
 							{manageError && <p className="mb-3 text-[11px] font-bold text-[#E31837] bg-red-50 border border-red-100 rounded-lg px-2 py-1.5">{manageError}</p>}
 
-							<form onSubmit={(event) => { void addLocation(event); }} className="space-y-2">
-								<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Add Location</p>
-								<input
-									value={newLocationName}
-									onChange={(event) => setNewLocationName(event.target.value)}
-									placeholder="Location name"
-									className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]"
-								/>
-								<input
-									value={newLocationVenue}
-									onChange={(event) => setNewLocationVenue(event.target.value)}
-									placeholder="Venue (optional)"
-									className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]"
-								/>
-								<button
-									disabled={manageBusy}
-									className="w-full py-2 rounded-xl bg-[#005696] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#004477] disabled:opacity-60"
-								>
-									Add Location
-								</button>
-							</form>
+							<div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
+								<form onSubmit={(event) => { event.preventDefault(); void saveEventScoringAuthority(); }} className="space-y-2 border border-gray-100 rounded-xl p-3">
+									<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">1) Event Scoring Mode</p>
+									<select value={eventScoringAuthority} onChange={(event) => setEventScoringAuthority(event.target.value as "ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID")} className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]">
+										<option value="ADMIN_ONLY">Admin only</option>
+										<option value="PLAYER_SELF">Player self-scoring</option>
+										<option value="HYBRID">Hybrid (Admin + Player)</option>
+									</select>
+									<button disabled={manageBusy} className="w-full py-2 rounded-xl bg-[#005696] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#004477] disabled:opacity-60">Save Scoring Mode</button>
+								</form>
 
-							<form onSubmit={(event) => { void addGame(event); }} className="space-y-2 mt-4">
-								<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Add Game</p>
-								<input
-									value={newGameName}
-									onChange={(event) => setNewGameName(event.target.value)}
-									placeholder="Game name"
-									className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]"
-								/>
-								<input
-									value={newGameScoreUnit}
-									onChange={(event) => setNewGameScoreUnit(event.target.value)}
-									placeholder="Score unit (points)"
-									className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]"
-								/>
-								<button
-									disabled={manageBusy}
-									className="w-full py-2 rounded-xl bg-[#005696] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#004477] disabled:opacity-60"
-								>
-									Create Game
-								</button>
-							</form>
+								<form onSubmit={(event) => { void addLocation(event); }} className="space-y-2 border border-gray-100 rounded-xl p-3">
+									<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">2) Create Location</p>
+									<input value={newLocationName} onChange={(event) => setNewLocationName(event.target.value)} placeholder="Location name" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+									<input value={newLocationVenue} onChange={(event) => setNewLocationVenue(event.target.value)} placeholder="Venue (optional)" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+									<button disabled={manageBusy} className="w-full py-2 rounded-xl bg-[#005696] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#004477] disabled:opacity-60">Add Location</button>
+								</form>
 
-							<form onSubmit={(event) => { void deployGameToLocation(event); }} className="space-y-2 mt-4">
-								<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Deploy Game To Location</p>
-								<select value={deployLocationId} onChange={(event) => setDeployLocationId(event.target.value)} className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]">
-									<option value="">Select location</option>
-									{locations.map((location) => <option key={location._id} value={location._id}>{location.name}</option>)}
-								</select>
-								<select value={deployGameId} onChange={(event) => setDeployGameId(event.target.value)} className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]">
-									<option value="">Select game</option>
-									{localGames.map((game) => <option key={game._id} value={game._id}>{game.name}</option>)}
-								</select>
-								<label className="text-[10px] font-black text-gray-500 uppercase tracking-widest flex items-center gap-2">
-									<input type="checkbox" checked={deployRoundsEnabled} onChange={(event) => setDeployRoundsEnabled(event.target.checked)} />
-									Enable rounds
-								</label>
-								<input
-									type="number"
-									min={1}
-									value={deployTotalRounds}
-									onChange={(event) => setDeployTotalRounds(event.target.value)}
-									disabled={!deployRoundsEnabled}
-									placeholder="Total rounds"
-									className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837] disabled:opacity-50"
-								/>
-								<input
-									type="number"
-									min={1}
-									value={deployMaxPointsPerRound}
-									onChange={(event) => setDeployMaxPointsPerRound(event.target.value)}
-									placeholder="Max points per round"
-									className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]"
-								/>
-								<button
-									disabled={manageBusy}
-									className="w-full py-2 rounded-xl bg-[#E31837] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#c1142f] disabled:opacity-60"
-								>
-									Deploy
-								</button>
-							</form>
+								<form onSubmit={(event) => { void addMultipleLocations(event); }} className="space-y-2 border border-gray-100 rounded-xl p-3">
+									<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">3) Add Multiple Locations</p>
+									<textarea value={bulkLocationInput} onChange={(event) => setBulkLocationInput(event.target.value)} rows={4} placeholder="One location per line" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+									<button disabled={manageBusy} className="w-full py-2 rounded-xl bg-[#005696] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#004477] disabled:opacity-60">Add All Locations</button>
+								</form>
+
+								<form onSubmit={(event) => { void importTemplateLocations(event); }} className="space-y-2 border border-gray-100 rounded-xl p-3">
+									<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">4) Reuse Existing Locations</p>
+									<div className="max-h-36 overflow-y-auto space-y-1 border border-gray-100 rounded-lg p-2">
+										{allLocations.filter((entry) => entry.eventId !== eventId).map((entry) => {
+											const checked = selectedTemplateLocationIds.includes(entry._id);
+											const sourceEvent = events.find((ev) => ev._id === entry.eventId)?.name ?? "Another event";
+											return (
+												<label key={entry._id} className="flex items-start gap-2 text-xs font-bold text-gray-600">
+													<input
+														type="checkbox"
+														checked={checked}
+														onChange={(event) => {
+															setSelectedTemplateLocationIds((prev) => event.target.checked ? [...prev, entry._id] : prev.filter((id) => id !== entry._id));
+														}}
+													/>
+													<span>{entry.name} <span className="text-gray-400">({sourceEvent})</span></span>
+												</label>
+											);
+										})}
+									</div>
+									<button disabled={manageBusy} className="w-full py-2 rounded-xl bg-[#005696] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#004477] disabled:opacity-60">Import Selected Templates</button>
+								</form>
+
+								<form onSubmit={(event) => { void addGame(event); }} className="space-y-2 border border-gray-100 rounded-xl p-3">
+									<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">5) Create Game</p>
+									<input value={newGameName} onChange={(event) => setNewGameName(event.target.value)} placeholder="Game name" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+									<input value={newGameScoreUnit} onChange={(event) => setNewGameScoreUnit(event.target.value)} placeholder="Score unit (points)" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+									<button disabled={manageBusy} className="w-full py-2 rounded-xl bg-[#005696] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#004477] disabled:opacity-60">Create Game</button>
+								</form>
+
+								<form onSubmit={(event) => { void saveGameEdits(event); }} className="space-y-2 border border-gray-100 rounded-xl p-3">
+									<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">6) Edit Existing Game</p>
+									<select value={editGameId} onChange={(event) => {
+										const target = localGames.find((entry) => entry._id === event.target.value);
+										setEditGameId(event.target.value);
+										setEditGameName(target?.name ?? "");
+										setEditGameScoreUnit(target?.scoreUnit ?? "points");
+										setEditGameScoringMode(target?.scoringMode ?? "INDIVIDUAL");
+									}} className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]">
+										<option value="">Select game</option>
+										{localGames.map((game) => <option key={game._id} value={game._id}>{game.name}</option>)}
+									</select>
+									<input value={editGameName} onChange={(event) => setEditGameName(event.target.value)} placeholder="Game name" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+									<select value={editGameScoringMode} onChange={(event) => setEditGameScoringMode(event.target.value as "INDIVIDUAL" | "CUMULATIVE")} className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]">
+										<option value="INDIVIDUAL">INDIVIDUAL</option>
+										<option value="CUMULATIVE">CUMULATIVE</option>
+									</select>
+									<input value={editGameScoreUnit} onChange={(event) => setEditGameScoreUnit(event.target.value)} placeholder="Score unit" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+									<button disabled={manageBusy} className="w-full py-2 rounded-xl bg-[#005696] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#004477] disabled:opacity-60">Save Game Changes</button>
+								</form>
+
+								<form onSubmit={(event) => { void deployGameToLocation(event); }} className="space-y-2 border border-gray-100 rounded-xl p-3">
+									<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">7) Deploy Multiple Games To One Location</p>
+									<select value={deployLocationId} onChange={(event) => setDeployLocationId(event.target.value)} className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]">
+										<option value="">Select location</option>
+										{locations.map((location) => <option key={location._id} value={location._id}>{location.name}</option>)}
+									</select>
+									<div className="max-h-36 overflow-y-auto space-y-1 border border-gray-100 rounded-lg p-2">
+										{localGames.map((game) => (
+											<label key={game._id} className="flex items-center gap-2 text-xs font-bold text-gray-600">
+												<input
+													type="checkbox"
+													checked={selectedDeployGameIds.includes(game._id)}
+													onChange={(event) => {
+														setSelectedDeployGameIds((prev) => event.target.checked ? [...prev, game._id] : prev.filter((id) => id !== game._id));
+													}}
+												/>
+												<span>{game.name}</span>
+											</label>
+										))}
+									</div>
+									<label className="text-[10px] font-black text-gray-500 uppercase tracking-widest flex items-center gap-2">
+										<input type="checkbox" checked={deployRoundsEnabled} onChange={(event) => setDeployRoundsEnabled(event.target.checked)} />
+										Enable rounds
+									</label>
+									<input type="number" min={1} value={deployTotalRounds} onChange={(event) => setDeployTotalRounds(event.target.value)} disabled={!deployRoundsEnabled} placeholder="Total rounds" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837] disabled:opacity-50" />
+									<input type="number" min={1} value={deployMaxPointsPerRound} onChange={(event) => setDeployMaxPointsPerRound(event.target.value)} placeholder="Max points per round" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+									<button disabled={manageBusy} className="w-full py-2 rounded-xl bg-[#E31837] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#c1142f] disabled:opacity-60">Deploy Selected Games</button>
+								</form>
+							</div>
 						</div>
 					</div>
 				</div>
@@ -2268,16 +2469,18 @@ function WizardModal({ token, events, games, onClose, onComplete }: {
 	const [joinLink, setJoinLink] = useState<JoinLinkResponse | null>(null);
 	const [locations, setLocations] = useState<LocationRecord[]>([]);
 
-	const [creatingEvent, setCreatingEvent] = useState(false);
+	const [creatingEvent, setCreatingEvent] = useState(true);
 	const [newEventName, setNewEventName] = useState("");
 	const [newEventDate, setNewEventDate] = useState(new Date().toISOString().slice(0, 10));
 	const [newEventScoringAuthority, setNewEventScoringAuthority] = useState<"ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID">("ADMIN_ONLY");
 
-	const [creatingLocation, setCreatingLocation] = useState(false);
+	const [creatingLocation, setCreatingLocation] = useState(true);
 	const [newLocationName, setNewLocationName] = useState("");
 	const [newLocationVenue, setNewLocationVenue] = useState("");
+	const [allLocationTemplates, setAllLocationTemplates] = useState<LocationRecord[]>([]);
+	const [selectedLocationTemplateId, setSelectedLocationTemplateId] = useState("");
 
-	const [creatingGame, setCreatingGame] = useState(false);
+	const [creatingGame, setCreatingGame] = useState(true);
 	const [newGameName, setNewGameName] = useState("");
 	const [newGameScoreUnit, setNewGameScoreUnit] = useState("points");
 	const [wizardRoundsEnabled, setWizardRoundsEnabled] = useState(false);
@@ -2292,6 +2495,8 @@ function WizardModal({ token, events, games, onClose, onComplete }: {
 	async function pickEvent(ev: EventRecord) {
 		setSelectedEvent(ev);
 		await loadLocations(ev._id);
+		const templates = await authed<LocationRecord[]>("/api/locations", token).catch(() => []);
+		setAllLocationTemplates(templates.filter((entry) => entry.eventId !== ev._id));
 		setStep(2);
 	}
 
@@ -2319,6 +2524,24 @@ function WizardModal({ token, events, games, onClose, onComplete }: {
 		setBusy(true); setError(null);
 		try {
 			const loc = await authed<LocationRecord>(`/api/events/${selectedEvent._id}/locations`, token, { method: "POST", body: JSON.stringify({ name: newLocationName.trim(), venue: newLocationVenue.trim() || undefined }) });
+			setLocations((prev) => [loc, ...prev]);
+			await pickLocation(loc);
+		} catch (err) { setError(err instanceof Error ? err.message : "Failed"); }
+		finally { setBusy(false); }
+	}
+
+	async function importLocationTemplate() {
+		if (!selectedEvent || !selectedLocationTemplateId) return;
+
+		const template = allLocationTemplates.find((entry) => entry._id === selectedLocationTemplateId);
+		if (!template) return;
+
+		setBusy(true); setError(null);
+		try {
+			const loc = await authed<LocationRecord>(`/api/events/${selectedEvent._id}/locations`, token, {
+				method: "POST",
+				body: JSON.stringify({ name: template.name, venue: template.venue })
+			});
 			setLocations((prev) => [loc, ...prev]);
 			await pickLocation(loc);
 		} catch (err) { setError(err instanceof Error ? err.message : "Failed"); }
@@ -2384,15 +2607,15 @@ function WizardModal({ token, events, games, onClose, onComplete }: {
 						<div className="space-y-4">
 							<label className="block text-sm font-bold text-gray-700 uppercase tracking-tight">Select Event</label>
 							<div className="grid gap-3 max-h-64 overflow-y-auto">
+								<button onClick={() => setCreatingEvent(true)} className="w-full p-4 border-2 border-dashed border-gray-300 rounded-xl text-gray-500 font-bold hover:border-[#E31837] hover:text-[#E31837] transition-all flex items-center justify-center gap-2">
+									<Plus size={18} /> Create New Event
+								</button>
 								{events.map((ev) => (
 									<button key={ev._id} onClick={() => { void pickEvent(ev); }} disabled={busy} className="w-full p-4 border-2 border-gray-100 rounded-xl flex items-center justify-between hover:border-[#E31837] hover:bg-red-50 transition-all text-left disabled:opacity-50">
 										<div><div className="font-bold">{ev.name}</div><div className="text-xs text-gray-500 uppercase">{ev.status}</div></div>
 										<ChevronRight className="text-gray-400" />
 									</button>
 								))}
-								<button onClick={() => setCreatingEvent(true)} className="w-full p-4 border-2 border-dashed border-gray-300 rounded-xl text-gray-500 font-bold hover:border-[#E31837] hover:text-[#E31837] transition-all flex items-center justify-center gap-2">
-									<Plus size={18} /> Create New Event
-								</button>
 							</div>
 						</div>
 					) : (
@@ -2416,6 +2639,9 @@ function WizardModal({ token, events, games, onClose, onComplete }: {
 						<div className="space-y-4">
 							<label className="block text-sm font-bold text-gray-700 uppercase tracking-tight">Select Location for <span className="text-[#005696]">{selectedEvent?.name}</span></label>
 							<div className="grid gap-3 max-h-64 overflow-y-auto">
+								<button onClick={() => setCreatingLocation(true)} className="w-full p-4 border-2 border-dashed border-gray-300 rounded-xl text-gray-500 font-bold hover:border-[#E31837] hover:text-[#E31837] transition-all flex items-center justify-center gap-2">
+									<Plus size={18} /> Add New Location
+								</button>
 								{locations.map((loc) => (
 									<button key={loc._id} onClick={() => { void pickLocation(loc); }} disabled={busy} className="w-full p-4 border-2 border-gray-100 rounded-xl flex items-center justify-between hover:border-[#E31837] hover:bg-red-50 transition-all text-left disabled:opacity-50">
 										<div className="flex gap-4 items-center">
@@ -2425,9 +2651,6 @@ function WizardModal({ token, events, games, onClose, onComplete }: {
 										<ChevronRight className="text-gray-400" />
 									</button>
 								))}
-								<button onClick={() => setCreatingLocation(true)} className="w-full p-4 border-2 border-dashed border-gray-300 rounded-xl text-gray-500 font-bold hover:border-[#E31837] hover:text-[#E31837] transition-all flex items-center justify-center gap-2">
-									<Plus size={18} /> Add New Location
-								</button>
 							</div>
 						</div>
 					) : (
@@ -2435,6 +2658,18 @@ function WizardModal({ token, events, games, onClose, onComplete }: {
 							<label className="block text-sm font-bold text-gray-700 uppercase">New Location</label>
 							<input autoFocus type="text" value={newLocationName} onChange={(e) => setNewLocationName(e.target.value)} placeholder="Location Name" className="w-full p-4 bg-gray-50 border-2 border-gray-200 rounded-xl focus:border-[#E31837] outline-none font-bold" />
 							<input type="text" value={newLocationVenue} onChange={(e) => setNewLocationVenue(e.target.value)} placeholder="Venue / Address (optional)" className="w-full p-4 bg-gray-50 border-2 border-gray-200 rounded-xl focus:border-[#E31837] outline-none font-bold" />
+							<div className="rounded-xl border border-gray-100 p-3 bg-gray-50 space-y-2">
+								<p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Or import existing location template</p>
+								<select value={selectedLocationTemplateId} onChange={(e) => setSelectedLocationTemplateId(e.target.value)} className="w-full p-2.5 bg-white border border-gray-200 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]">
+									<option value="">Select template location</option>
+									{allLocationTemplates.map((entry) => (
+										<option key={entry._id} value={entry._id}>{entry.name}</option>
+									))}
+								</select>
+								<button type="button" disabled={!selectedLocationTemplateId || busy} onClick={() => { void importLocationTemplate(); }} className="w-full py-2 rounded-xl bg-[#005696] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#004477] disabled:opacity-60">
+									Import Template Location
+								</button>
+							</div>
 							<div className="flex gap-3 pt-2">
 								<button onClick={() => setCreatingLocation(false)} className="flex-1 py-4 px-6 rounded-xl border-2 border-gray-100 font-bold text-gray-500 hover:bg-gray-50">Cancel</button>
 								<button disabled={!newLocationName || busy} onClick={() => { void createLocation(); }} className={`flex-1 py-4 px-6 rounded-xl font-bold text-white ${newLocationName && !busy ? "bg-[#E31837]" : "bg-gray-300"}`}>{busy ? "Creating…" : "Continue"}</button>
@@ -2454,6 +2689,9 @@ function WizardModal({ token, events, games, onClose, onComplete }: {
 								<input type="number" min={1} value={wizardMaxPointsPerRound} onChange={(e) => setWizardMaxPointsPerRound(e.target.value)} placeholder="Max points/round" className="w-full p-2.5 bg-white border border-gray-200 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
 							</div>
 							<div className="grid gap-3 max-h-64 overflow-y-auto">
+								<button onClick={() => setCreatingGame(true)} className="w-full p-4 border-2 border-dashed border-gray-300 rounded-xl text-gray-500 font-bold hover:border-[#E31837] hover:text-[#E31837] transition-all flex items-center justify-center gap-2">
+									<Plus size={18} /> Create New Game
+								</button>
 								{games.map((gm) => (
 									<button key={gm._id} onClick={() => { void deploy(gm); }} disabled={busy} className="w-full p-4 border-2 border-gray-100 rounded-xl flex items-center justify-between hover:border-[#E31837] hover:bg-red-50 transition-all text-left disabled:opacity-50">
 										<div className="flex gap-4 items-center">
@@ -2463,9 +2701,6 @@ function WizardModal({ token, events, games, onClose, onComplete }: {
 										<ChevronRight className="text-gray-400" />
 									</button>
 								))}
-								<button onClick={() => setCreatingGame(true)} className="w-full p-4 border-2 border-dashed border-gray-300 rounded-xl text-gray-500 font-bold hover:border-[#E31837] hover:text-[#E31837] transition-all flex items-center justify-center gap-2">
-									<Plus size={18} /> Create New Game
-								</button>
 							</div>
 						</div>
 					) : (

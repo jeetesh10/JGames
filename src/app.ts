@@ -668,6 +668,16 @@ app.get(
   })
 );
 
+app.get(
+  "/api/locations",
+  requireAuth,
+  requireRole(["ADMIN"]),
+  asyncHandler(async (_req, res) => {
+    const locations = await LocationModel.find().sort({ createdAt: -1 }).lean();
+    res.json(locations);
+  })
+);
+
 app.patch(
   "/api/events/:eventId/locations/:locationId",
   requireAuth,
