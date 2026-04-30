@@ -421,6 +421,9 @@ function PlayerJoinPage() {
 	const [leaderboardOnlyMode, setLeaderboardOnlyMode] = useState(false);
 	const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
 	const [loadingBoard, setLoadingBoard] = useState(false);
+	const roundsEnabled = Boolean(joinMeta?.settings?.roundsEnabled);
+	const configuredTotalRounds = Math.max(1, Number(joinMeta?.settings?.totalRounds ?? 1) || 1);
+	const currentRound = Math.max(1, Math.min(Number(selfRoundNumber) || 1, configuredTotalRounds));
 
 	useEffect(() => {
 		void loadJoinMeta();
@@ -504,10 +507,13 @@ function PlayerJoinPage() {
 			return;
 		}
 
-		const roundsEnabled = Boolean(joinMeta?.settings?.roundsEnabled);
-		const roundNumber = Number(selfRoundNumber);
-		if (roundsEnabled && (!Number.isInteger(roundNumber) || roundNumber <= 0)) {
+		if (roundsEnabled && (!Number.isInteger(currentRound) || currentRound <= 0)) {
 			setError("Enter a valid round number");
+			return;
+		}
+
+		if (roundsEnabled && currentRound > configuredTotalRounds) {
+			setError("All rounds are already completed.");
 			return;
 		}
 
@@ -520,15 +526,26 @@ function PlayerJoinPage() {
 				body: JSON.stringify({
 					playerId,
 					points,
-					roundNumber: roundsEnabled ? roundNumber : undefined
+					roundNumber: roundsEnabled ? currentRound : undefined
 				})
 			});
 
-			setSelfScoringStatus("Score submitted successfully");
+			if (roundsEnabled) {
+				if (currentRound < configuredTotalRounds) {
+					setSelfScoringStatus(`Round ${currentRound} submitted. Continue to round ${currentRound + 1}.`);
+					setSelfRoundNumber(String(currentRound + 1));
+					setSelfPoints("0");
+				} else {
+					setSelfScoringStatus(`Round ${currentRound} submitted. All rounds completed.`);
+					setLeaderboardOnlyMode(true);
+				}
+			} else {
+				setSelfScoringStatus("Score submitted successfully");
+				setLeaderboardOnlyMode(true);
+			}
 			if (eventGameId) {
 				await loadLeaderboardForGame(eventGameId);
 			}
-			setLeaderboardOnlyMode(true);
 		} catch (caught) {
 			setError(caught instanceof Error ? caught.message : "Unable to submit score");
 		} finally {
@@ -605,24 +622,23 @@ function PlayerJoinPage() {
 							<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Score Submission</p>
 							{canSelfScore ? (
 								<form onSubmit={(event) => { void submitSelfScore(event); }} className="space-y-3">
+									{roundsEnabled && (
+										<p className="text-xs font-black text-[#005696] bg-blue-50 border border-blue-100 rounded-xl px-3 py-2">
+											Round {currentRound} of {configuredTotalRounds}
+										</p>
+									)}
 									<div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
 										<input
 											type="number"
 											value={selfPoints}
 											onChange={(event) => setSelfPoints(event.target.value)}
-												placeholder="Maximum points"
+											placeholder={roundsEnabled ? `Maximum points for round ${currentRound}` : "Maximum points"}
 											className="w-full p-3 bg-white border border-gray-200 rounded-xl outline-none focus:border-[#005696] font-bold"
 										/>
-										{joinMeta?.settings?.roundsEnabled ? (
-											<input
-												type="number"
-												value={selfRoundNumber}
-												onChange={(event) => setSelfRoundNumber(event.target.value)}
-												min={1}
-												max={joinMeta.settings?.totalRounds}
-												placeholder="Round"
-												className="w-full p-3 bg-white border border-gray-200 rounded-xl outline-none focus:border-[#005696] font-bold"
-											/>
+										{roundsEnabled ? (
+											<div className="w-full p-3 bg-white border border-gray-200 rounded-xl font-black text-[#005696] text-sm">
+												Round {currentRound}
+											</div>
 										) : null}
 									</div>
 									<button
@@ -1283,6 +1299,7 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 	const [detailLocFilter, setDetailLocFilter] = useState("all");
 	const [detailGameFilter, setDetailGameFilter] = useState("all");
 	const [joinLinks, setJoinLinks] = useState<Record<string, JoinLinkResponse>>({});
+	const joinLinksRef = useRef<Record<string, JoinLinkResponse>>({});
 	const [busy, setBusy] = useState(false);
 	const [filterBusy, setFilterBusy] = useState(false);
 	const [quickSetupOpen, setQuickSetupOpen] = useState(false);
@@ -1371,6 +1388,10 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 	}, [games]);
 
 	useEffect(() => {
+		joinLinksRef.current = joinLinks;
+	}, [joinLinks]);
+
+	useEffect(() => {
 		if (quickSetupOpen) {
 			setManageSection("locations");
 			setManageGameMode("create");
@@ -1455,6 +1476,11 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 	}, [quickSetupOpen, token]);
 
 	const resolveJoinLink = useCallback(async (eventGame: EventGameRecord): Promise<JoinLinkResponse> => {
+		const cached = joinLinksRef.current[eventGame._id];
+		if (cached) {
+			return cached;
+		}
+
 		const fallback = buildClientJoinLink(eventGame._id, eventGame.joinToken);
 		try {
 			const link = await authed<JoinLinkResponse>(`/api/event-games/${eventGame._id}/join-link`, token);
