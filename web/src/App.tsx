@@ -202,7 +202,7 @@ async function ensureQrDataUrl(existingDataUrl: string | undefined, value: strin
 
 	try {
 		return await QRCodeLib.toDataURL(value, {
-			errorCorrectionLevel: "M",
+			errorCorrectionLevel: "H",
 			margin: 1,
 			width: 720,
 			color: {
@@ -247,7 +247,7 @@ function QRDisplay({ dataUrl, value, size = 200 }: { dataUrl?: string; value?: s
 
 			try {
 				await QRCodeLib.toCanvas(canvas, value, {
-					errorCorrectionLevel: "M",
+					errorCorrectionLevel: "H",
 					margin: 1,
 					width: Math.max(120, size - 12),
 					color: {
@@ -274,6 +274,7 @@ function QRDisplay({ dataUrl, value, size = 200 }: { dataUrl?: string; value?: s
 	}, [value, dataUrl, dataFailed, size]);
 
 	const effectiveDataUrl = !dataFailed && dataUrl ? dataUrl : undefined;
+	const showBrandBadge = Boolean(effectiveDataUrl || canvasReady);
 
 	return (
 		<div
@@ -298,6 +299,11 @@ function QRDisplay({ dataUrl, value, size = 200 }: { dataUrl?: string; value?: s
 					/>
 					{!canvasReady && <QrCode className="absolute text-gray-300" size={48} />}
 				</>
+			)}
+			{showBrandBadge && (
+				<div className="absolute rounded-full bg-white border-2 border-gray-200 flex items-center justify-center pointer-events-none" style={{ width: Math.max(28, size * 0.22), height: Math.max(28, size * 0.22) }}>
+					<span className="font-black tracking-tight text-[#005696]" style={{ fontSize: Math.max(10, size * 0.07) }}>JB</span>
+				</div>
 			)}
 		</div>
 	);
@@ -2410,11 +2416,8 @@ function EventLinkWizardModal({
 							</div>
 
 							<div className="border border-gray-100 rounded-xl p-3 flex flex-col items-center gap-3">
-								{loadingLink ? (
-									<p className="py-8 text-sm font-bold text-gray-400 animate-pulse">Preparing link...</p>
-								) : (
-									<QRDisplay dataUrl={activeQrDataUrl} value={activeUrl} size={220} />
-								)}
+								<QRDisplay dataUrl={activeQrDataUrl} value={activeUrl} size={220} />
+								{loadingLink && <p className="text-[11px] font-bold text-gray-400 animate-pulse">Refreshing link…</p>}
 								<a href={activeUrl} target="_blank" rel="noreferrer" className="text-[11px] text-[#005696] font-bold break-all">
 									{activeUrl}
 								</a>
