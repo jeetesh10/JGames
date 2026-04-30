@@ -1298,10 +1298,12 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 	const [editGameScoringMode, setEditGameScoringMode] = useState<"INDIVIDUAL" | "CUMULATIVE">("INDIVIDUAL");
 	const [deployLocationId, setDeployLocationId] = useState("");
 	const [selectedDeployGameIds, setSelectedDeployGameIds] = useState<string[]>([]);
-	const [deployRoundsEnabled, setDeployRoundsEnabled] = useState(false);
-	const [deployScoringAuthority, setDeployScoringAuthority] = useState<"ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID">("ADMIN_ONLY");
-	const [deployTotalRounds, setDeployTotalRounds] = useState("3");
-	const [deployMaxPointsPerRound, setDeployMaxPointsPerRound] = useState("10");
+	const [deployGameSettingsById, setDeployGameSettingsById] = useState<Record<string, {
+		scoringAuthority: "ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID";
+		roundsEnabled: boolean;
+		totalRounds: string;
+		maxPointsPerRound: string;
+	}>>({});
 	const gameNameById = useMemo(() => new Map(localGames.map((game) => [game._id, game.name])), [localGames]);
 	const mappedGameOptions = useMemo(() => {
 		const seen = new Set<string>();
@@ -1662,10 +1664,10 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 							locationId: deployLocationId,
 							gameId,
 							settings: {
-								scoringAuthority: deployScoringAuthority,
-								roundsEnabled: deployRoundsEnabled,
-								totalRounds: deployRoundsEnabled ? Number(deployTotalRounds) : undefined,
-								maxPointsPerRound: Number(deployMaxPointsPerRound) || undefined
+								scoringAuthority: deployGameSettingsById[gameId]?.scoringAuthority ?? "ADMIN_ONLY",
+								roundsEnabled: deployGameSettingsById[gameId]?.roundsEnabled ?? false,
+								totalRounds: deployGameSettingsById[gameId]?.roundsEnabled ? Number(deployGameSettingsById[gameId]?.totalRounds || 0) || undefined : undefined,
+								maxPointsPerRound: Number(deployGameSettingsById[gameId]?.maxPointsPerRound || 0) || undefined
 							}
 						})
 					})
@@ -1681,6 +1683,13 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 				return next;
 			});
 			setSelectedDeployGameIds([]);
+			setDeployGameSettingsById((prev) => {
+				const next = { ...prev };
+				for (const gameId of pendingGameIds) {
+					delete next[gameId];
+				}
+				return next;
+			});
 			setManageMessage(`${created.length} game(s) deployed to location`);
 			void onReload();
 		} catch (caught) {
@@ -2038,11 +2047,6 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 												<option value="">Select location</option>
 												{locations.map((location) => <option key={location._id} value={location._id}>{location.name}</option>)}
 											</select>
-											<select value={deployScoringAuthority} onChange={(event) => setDeployScoringAuthority(event.target.value as "ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID")} className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]">
-												<option value="ADMIN_ONLY">Scoring: Admin only</option>
-												<option value="PLAYER_SELF">Scoring: Player self-scoring</option>
-												<option value="HYBRID">Scoring: Hybrid (Admin + Player)</option>
-											</select>
 											<div className="max-h-36 overflow-y-auto space-y-1 border border-gray-100 rounded-lg p-2">
 												{localGames.map((game) => (
 													<label key={game._id} className="flex items-center gap-2 text-xs font-bold text-gray-600">
@@ -2051,18 +2055,58 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 															checked={selectedDeployGameIds.includes(game._id)}
 															onChange={(event) => {
 																setSelectedDeployGameIds((prev) => event.target.checked ? [...prev, game._id] : prev.filter((id) => id !== game._id));
+																if (event.target.checked) {
+																	setDeployGameSettingsById((prev) => ({
+																		...prev,
+																		[game._id]: prev[game._id] ?? {
+																			scoringAuthority: "ADMIN_ONLY",
+																			roundsEnabled: false,
+																			totalRounds: "3",
+																			maxPointsPerRound: "10"
+																		}
+																	}));
+																} else {
+																	setDeployGameSettingsById((prev) => {
+																		const next = { ...prev };
+																		delete next[game._id];
+																		return next;
+																	});
+																}
 															}}
 														/>
 														<span>{game.name}</span>
 													</label>
 												))}
 											</div>
-											<label className="text-[10px] font-black text-gray-500 uppercase tracking-widest flex items-center gap-2">
-												<input type="checkbox" checked={deployRoundsEnabled} onChange={(event) => setDeployRoundsEnabled(event.target.checked)} />
-												Enable rounds
-											</label>
-											<input type="number" min={1} value={deployTotalRounds} onChange={(event) => setDeployTotalRounds(event.target.value)} disabled={!deployRoundsEnabled} placeholder="Total rounds" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837] disabled:opacity-50" />
-											<input type="number" min={1} value={deployMaxPointsPerRound} onChange={(event) => setDeployMaxPointsPerRound(event.target.value)} placeholder="Max points per round" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+											{selectedDeployGameIds.length > 0 && (
+												<div className="space-y-2">
+													<p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Per-game deploy settings</p>
+													{selectedDeployGameIds.map((gameId) => {
+														const settings = deployGameSettingsById[gameId] ?? {
+															scoringAuthority: "ADMIN_ONLY" as const,
+															roundsEnabled: false,
+															totalRounds: "3",
+															maxPointsPerRound: "10"
+														};
+														return (
+															<div key={gameId} className="border border-gray-100 rounded-xl p-2.5 space-y-2 bg-gray-50">
+																<p className="text-xs font-black text-gray-700">{gameNameById.get(gameId) ?? "Game"}</p>
+																<select value={settings.scoringAuthority} onChange={(event) => setDeployGameSettingsById((prev) => ({ ...prev, [gameId]: { ...settings, scoringAuthority: event.target.value as "ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID" } }))} className="w-full bg-white border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]">
+																	<option value="ADMIN_ONLY">Scoring: Admin only</option>
+																	<option value="PLAYER_SELF">Scoring: Player self-scoring</option>
+																	<option value="HYBRID">Scoring: Hybrid (Admin + Player)</option>
+																</select>
+																<label className="text-[10px] font-black text-gray-500 uppercase tracking-widest flex items-center gap-2">
+																	<input type="checkbox" checked={settings.roundsEnabled} onChange={(event) => setDeployGameSettingsById((prev) => ({ ...prev, [gameId]: { ...settings, roundsEnabled: event.target.checked } }))} />
+																	Enable rounds
+																</label>
+																<input type="number" min={1} value={settings.totalRounds} onChange={(event) => setDeployGameSettingsById((prev) => ({ ...prev, [gameId]: { ...settings, totalRounds: event.target.value } }))} disabled={!settings.roundsEnabled} placeholder="Total rounds" className="w-full bg-white border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837] disabled:opacity-50" />
+																<input type="number" min={1} value={settings.maxPointsPerRound} onChange={(event) => setDeployGameSettingsById((prev) => ({ ...prev, [gameId]: { ...settings, maxPointsPerRound: event.target.value } }))} placeholder="Max points per round" className="w-full bg-white border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+															</div>
+														);
+													})}
+												</div>
+											)}
 											<button disabled={manageBusy} className="w-full py-2 rounded-xl bg-[#E31837] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#c1142f] disabled:opacity-60">Deploy Selected Games</button>
 										</form>
 									)}
