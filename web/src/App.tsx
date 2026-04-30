@@ -1455,7 +1455,7 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 	}, [quickSetupOpen, token]);
 
 	const resolveJoinLink = useCallback(async (eventGame: EventGameRecord): Promise<JoinLinkResponse> => {
-		const fallback = joinLinks[eventGame._id] ?? buildClientJoinLink(eventGame._id, eventGame.joinToken);
+		const fallback = buildClientJoinLink(eventGame._id, eventGame.joinToken);
 		try {
 			const link = await authed<JoinLinkResponse>(`/api/event-games/${eventGame._id}/join-link`, token);
 			setJoinLinks((prev) => ({ ...prev, [eventGame._id]: link }));
@@ -1463,7 +1463,7 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 		} catch {
 			return fallback;
 		}
-	}, [joinLinks, token]);
+	}, [token]);
 
 	async function addLocation(event: FormEvent) {
 		event.preventDefault();
@@ -2181,6 +2181,7 @@ function EventLinkWizardModal({
 	const [loadingLink, setLoadingLink] = useState(false);
 	const [actionBusy, setActionBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const initialSelectionAppliedRef = useRef(false);
 
 	const locationNameById = useMemo(() => new Map(locations.map((item) => [item._id, item.name])), [locations]);
 
@@ -2247,9 +2248,14 @@ function EventLinkWizardModal({
 	const linkLabel = `${selectedGameLabel} ${audience === "player" ? "Player" : "Game Admin"}`;
 
 	useEffect(() => {
+		if (initialSelectionAppliedRef.current) {
+			return;
+		}
+
 		if (initialEventGameId) {
 			const initialEventGame = eventGames.find((item) => item._id === initialEventGameId);
 			if (!initialEventGame) return;
+			initialSelectionAppliedRef.current = true;
 
 			setSelectedLocationId(initialEventGame.locationId);
 			setSelectedEventGameId(initialEventGame._id);
@@ -2266,6 +2272,7 @@ function EventLinkWizardModal({
 		}
 
 		if (initialLocationId) {
+			initialSelectionAppliedRef.current = true;
 			setSelectedLocationId(initialLocationId);
 			setSelectedEventGameId("");
 			setJoinLink(null);
