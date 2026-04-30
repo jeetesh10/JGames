@@ -1281,6 +1281,8 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 	const [filterBusy, setFilterBusy] = useState(false);
 	const [quickSetupOpen, setQuickSetupOpen] = useState(false);
 	const [linkWizardOpen, setLinkWizardOpen] = useState(false);
+	const [linkWizardInitialLocationId, setLinkWizardInitialLocationId] = useState("");
+	const [linkWizardInitialEventGameId, setLinkWizardInitialEventGameId] = useState("");
 	const [manageBusy, setManageBusy] = useState(false);
 	const [manageError, setManageError] = useState<string | null>(null);
 	const [manageMessage, setManageMessage] = useState<string | null>(null);
@@ -1693,6 +1695,10 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 				return next;
 			});
 			setManageMessage(`${created.length} game(s) deployed to location`);
+			setQuickSetupOpen(false);
+			setLinkWizardInitialLocationId(deployLocationId);
+			setLinkWizardInitialEventGameId(created.length === 1 ? created[0]._id : "");
+			setLinkWizardOpen(true);
 			void onReload();
 		} catch (caught) {
 			setManageError(caught instanceof Error ? caught.message : "Unable to deploy game");
@@ -1937,7 +1943,13 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 					eventGames={eventGames}
 					locations={locations}
 					gameNameById={gameNameById}
-					onClose={() => setLinkWizardOpen(false)}
+					initialLocationId={linkWizardInitialLocationId}
+					initialEventGameId={linkWizardInitialEventGameId}
+					onClose={() => {
+						setLinkWizardOpen(false);
+						setLinkWizardInitialLocationId("");
+						setLinkWizardInitialEventGameId("");
+					}}
 					onResolveJoinLink={resolveJoinLink}
 				/>
 			)}
@@ -2143,12 +2155,16 @@ function EventLinkWizardModal({
 	locations,
 	gameNameById,
 	onClose,
+	initialLocationId,
+	initialEventGameId,
 	onResolveJoinLink
 }: {
 	eventGames: EventGameRecord[];
 	locations: LocationRecord[];
 	gameNameById: Map<string, string>;
 	onClose: () => void;
+	initialLocationId?: string;
+	initialEventGameId?: string;
 	onResolveJoinLink: (eventGame: EventGameRecord) => Promise<JoinLinkResponse>;
 }) {
 	const [step, setStep] = useState<LinkWizardStep>(1);
@@ -2223,6 +2239,34 @@ function EventLinkWizardModal({
 	}, [effectiveLink, audience]);
 
 	const linkLabel = `${selectedGameLabel} ${audience === "player" ? "Player" : "Game Admin"}`;
+
+	useEffect(() => {
+		if (initialEventGameId) {
+			const initialEventGame = eventGames.find((item) => item._id === initialEventGameId);
+			if (!initialEventGame) return;
+
+			setSelectedLocationId(initialEventGame.locationId);
+			setSelectedEventGameId(initialEventGame._id);
+			setJoinLink(null);
+			setError(null);
+			setStep(3);
+			setLoadingLink(true);
+
+			void onResolveJoinLink(initialEventGame)
+				.then((link) => setJoinLink(link))
+				.catch((caught) => setError(caught instanceof Error ? caught.message : "Unable to load QR link"))
+				.finally(() => setLoadingLink(false));
+			return;
+		}
+
+		if (initialLocationId) {
+			setSelectedLocationId(initialLocationId);
+			setSelectedEventGameId("");
+			setJoinLink(null);
+			setError(null);
+			setStep(2);
+		}
+	}, [eventGames, initialEventGameId, initialLocationId, onResolveJoinLink]);
 
 	function pickLocation(locationId: string) {
 		setSelectedLocationId(locationId);
