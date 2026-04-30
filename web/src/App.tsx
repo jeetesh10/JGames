@@ -494,7 +494,7 @@ function PlayerJoinPage() {
 
 		const points = Number(selfPoints);
 		if (!Number.isFinite(points)) {
-			setError("Enter a valid points value");
+			setError("Enter a valid maximum points value");
 			return;
 		}
 
@@ -604,7 +604,7 @@ function PlayerJoinPage() {
 											type="number"
 											value={selfPoints}
 											onChange={(event) => setSelfPoints(event.target.value)}
-											placeholder="Points"
+												placeholder="Maximum points"
 											className="w-full p-3 bg-white border border-gray-200 rounded-xl outline-none focus:border-[#005696] font-bold"
 										/>
 										{joinMeta?.settings?.roundsEnabled ? (
@@ -734,7 +734,7 @@ function GameAdminPage() {
 		const raw = draftScores[playerId] ?? "0";
 		const points = Number(raw);
 		if (!Number.isFinite(points)) {
-			setError("Enter a valid number for points");
+			setError("Enter a valid number for maximum points");
 			return;
 		}
 
@@ -750,7 +750,7 @@ function GameAdminPage() {
 					method: "POST",
 					body: JSON.stringify({ eventGameId, playerId, points, source: "MANUAL" }),
 				});
-			setStatus(`Score submitted: ${result.points} points`);
+			setStatus(`Score submitted: ${result.points} maximum points`);
 			setDraftScores((prev) => {
 				const next = { ...prev };
 				delete next[playerId];
@@ -1291,10 +1291,10 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 	const [allLocations, setAllLocations] = useState<LocationRecord[]>([]);
 	const [selectedTemplateLocationIds, setSelectedTemplateLocationIds] = useState<string[]>([]);
 	const [newGameName, setNewGameName] = useState("");
-	const [newGameScoreUnit, setNewGameScoreUnit] = useState("points");
+	const [newGameScoreUnit, setNewGameScoreUnit] = useState("maximum points");
 	const [editGameId, setEditGameId] = useState("");
 	const [editGameName, setEditGameName] = useState("");
-	const [editGameScoreUnit, setEditGameScoreUnit] = useState("points");
+	const [editGameScoreUnit, setEditGameScoreUnit] = useState("maximum points");
 	const [editGameScoringMode, setEditGameScoringMode] = useState<"INDIVIDUAL" | "CUMULATIVE">("INDIVIDUAL");
 	const [deployLocationId, setDeployLocationId] = useState("");
 	const [selectedDeployGameIds, setSelectedDeployGameIds] = useState<string[]>([]);
@@ -1397,7 +1397,7 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 			const firstGame = localGames[0];
 			setEditGameId(firstGame?._id ?? "");
 			setEditGameName(firstGame?.name ?? "");
-			setEditGameScoreUnit(firstGame?.scoreUnit ?? "points");
+			setEditGameScoreUnit(firstGame?.scoreUnit ?? "maximum points");
 			setEditGameScoringMode(firstGame?.scoringMode ?? "INDIVIDUAL");
 		}
 	}, [localGames, editGameId]);
@@ -1584,13 +1584,13 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 				body: JSON.stringify({
 					name: newGameName.trim(),
 					key,
-					scoreUnit: newGameScoreUnit.trim() || "points"
+					scoreUnit: newGameScoreUnit.trim() || "maximum points"
 				})
 			});
 			setLocalGames((prev) => [created, ...prev]);
 			setSelectedDeployGameIds((prev) => [...new Set([created._id, ...prev])]);
 			setNewGameName("");
-			setNewGameScoreUnit("points");
+			setNewGameScoreUnit("maximum points");
 			setManageMessage(`Game created: ${created.name}`);
 			void onReload();
 		} catch (caught) {
@@ -1623,7 +1623,7 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 					name: editGameName.trim(),
 					key,
 					scoringMode: editGameScoringMode,
-					scoreUnit: editGameScoreUnit.trim() || "points"
+					scoreUnit: editGameScoreUnit.trim() || "maximum points"
 				})
 			});
 
@@ -2013,7 +2013,7 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 											<form onSubmit={(event) => { void addGame(event); }} className="space-y-2 border border-gray-100 rounded-xl p-3">
 												<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Create Game</p>
 												<input value={newGameName} onChange={(event) => setNewGameName(event.target.value)} placeholder="Game name" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
-												<input value={newGameScoreUnit} onChange={(event) => setNewGameScoreUnit(event.target.value)} placeholder="Score unit (points)" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+												<input value={newGameScoreUnit} onChange={(event) => setNewGameScoreUnit(event.target.value)} placeholder="Score unit (maximum points)" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
 												<button disabled={manageBusy} className="w-full py-2 rounded-xl bg-[#005696] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#004477] disabled:opacity-60">Create Game</button>
 											</form>
 
@@ -2023,7 +2023,7 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 													const target = localGames.find((entry) => entry._id === event.target.value);
 													setEditGameId(event.target.value);
 													setEditGameName(target?.name ?? "");
-													setEditGameScoreUnit(target?.scoreUnit ?? "points");
+													setEditGameScoreUnit(target?.scoreUnit ?? "maximum points");
 													setEditGameScoringMode(target?.scoringMode ?? "INDIVIDUAL");
 												}} className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]">
 													<option value="">Select game</option>
@@ -2101,7 +2101,7 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 																	Enable rounds
 																</label>
 																<input type="number" min={1} value={settings.totalRounds} onChange={(event) => setDeployGameSettingsById((prev) => ({ ...prev, [gameId]: { ...settings, totalRounds: event.target.value } }))} disabled={!settings.roundsEnabled} placeholder="Total rounds" className="w-full bg-white border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837] disabled:opacity-50" />
-																<input type="number" min={1} value={settings.maxPointsPerRound} onChange={(event) => setDeployGameSettingsById((prev) => ({ ...prev, [gameId]: { ...settings, maxPointsPerRound: event.target.value } }))} placeholder="Max points per round" className="w-full bg-white border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+																<input type="number" min={1} value={settings.maxPointsPerRound} onChange={(event) => setDeployGameSettingsById((prev) => ({ ...prev, [gameId]: { ...settings, maxPointsPerRound: event.target.value } }))} placeholder="Maximum points per round" className="w-full bg-white border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
 															</div>
 														);
 													})}
@@ -2530,7 +2530,7 @@ function WizardModal({ token, events, games, onClose, onComplete }: {
 
 	const [creatingGame, setCreatingGame] = useState(true);
 	const [newGameName, setNewGameName] = useState("");
-	const [newGameScoreUnit, setNewGameScoreUnit] = useState("points");
+	const [newGameScoreUnit, setNewGameScoreUnit] = useState("maximum points");
 	const [wizardRoundsEnabled, setWizardRoundsEnabled] = useState(false);
 	const [wizardScoringAuthority, setWizardScoringAuthority] = useState<"ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID">("ADMIN_ONLY");
 	const [wizardTotalRounds, setWizardTotalRounds] = useState("3");
@@ -2735,7 +2735,7 @@ function WizardModal({ token, events, games, onClose, onComplete }: {
 									Enable rounds
 								</label>
 								<input type="number" min={1} value={wizardTotalRounds} onChange={(e) => setWizardTotalRounds(e.target.value)} disabled={!wizardRoundsEnabled} placeholder="Total rounds" className="w-full p-2.5 bg-white border border-gray-200 rounded-xl text-xs font-bold outline-none focus:border-[#E31837] disabled:opacity-50" />
-								<input type="number" min={1} value={wizardMaxPointsPerRound} onChange={(e) => setWizardMaxPointsPerRound(e.target.value)} placeholder="Max points/round" className="w-full p-2.5 bg-white border border-gray-200 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+											<input type="number" min={1} value={wizardMaxPointsPerRound} onChange={(e) => setWizardMaxPointsPerRound(e.target.value)} placeholder="Maximum points per round" className="w-full p-2.5 bg-white border border-gray-200 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
 							</div>
 							<div className="grid gap-3 max-h-64 overflow-y-auto">
 								<button onClick={() => setCreatingGame(true)} className="w-full p-4 border-2 border-dashed border-gray-300 rounded-xl text-gray-500 font-bold hover:border-[#E31837] hover:text-[#E31837] transition-all flex items-center justify-center gap-2">
@@ -2756,7 +2756,7 @@ function WizardModal({ token, events, games, onClose, onComplete }: {
 						<div className="space-y-4">
 							<label className="block text-sm font-bold text-gray-700 uppercase">New Game</label>
 							<input autoFocus type="text" value={newGameName} onChange={(e) => setNewGameName(e.target.value)} placeholder="Game Name" className="w-full p-4 bg-gray-50 border-2 border-gray-200 rounded-xl focus:border-[#E31837] outline-none font-bold" />
-							<input type="text" value={newGameScoreUnit} onChange={(e) => setNewGameScoreUnit(e.target.value)} placeholder="Score unit (e.g. points, seconds)" className="w-full p-4 bg-gray-50 border-2 border-gray-200 rounded-xl focus:border-[#E31837] outline-none font-bold" />
+							<input type="text" value={newGameScoreUnit} onChange={(e) => setNewGameScoreUnit(e.target.value)} placeholder="Score unit (e.g. maximum points, seconds)" className="w-full p-4 bg-gray-50 border-2 border-gray-200 rounded-xl focus:border-[#E31837] outline-none font-bold" />
 							<div className="flex gap-3 pt-2">
 								<button onClick={() => setCreatingGame(false)} className="flex-1 py-4 px-6 rounded-xl border-2 border-gray-100 font-bold text-gray-500 hover:bg-gray-50">Cancel</button>
 								<button disabled={!newGameName || busy} onClick={() => { void createGame(); }} className={`flex-1 py-4 px-6 rounded-xl font-bold text-white ${newGameName && !busy ? "bg-[#E31837]" : "bg-gray-300"}`}>{busy ? "Creating…" : "Continue"}</button>
