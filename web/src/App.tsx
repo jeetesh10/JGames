@@ -1285,6 +1285,7 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 	const [manageError, setManageError] = useState<string | null>(null);
 	const [manageMessage, setManageMessage] = useState<string | null>(null);
 	const [manageSection, setManageSection] = useState<"locations" | "games" | "deploy">("locations");
+	const [manageGameMode, setManageGameMode] = useState<"create" | "edit">("create");
 	const [newLocationName, setNewLocationName] = useState("");
 	const [newLocationVenue, setNewLocationVenue] = useState("");
 	const [bulkLocationInput, setBulkLocationInput] = useState("");
@@ -1364,6 +1365,7 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 	useEffect(() => {
 		if (quickSetupOpen) {
 			setManageSection("locations");
+			setManageGameMode("create");
 		}
 	}, [quickSetupOpen]);
 
@@ -2010,33 +2012,46 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 
 									{manageSection === "games" && (
 										<div className="space-y-3">
-											<form onSubmit={(event) => { void addGame(event); }} className="space-y-2 border border-gray-100 rounded-xl p-3">
-												<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Create Game</p>
-												<input value={newGameName} onChange={(event) => setNewGameName(event.target.value)} placeholder="Game name" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
-												<input value={newGameScoreUnit} onChange={(event) => setNewGameScoreUnit(event.target.value)} placeholder="Score unit (maximum points)" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
-												<button disabled={manageBusy} className="w-full py-2 rounded-xl bg-[#005696] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#004477] disabled:opacity-60">Create Game</button>
-											</form>
+											<div className="grid grid-cols-2 gap-2 rounded-xl bg-gray-100 p-1">
+												<button type="button" onClick={() => setManageGameMode("create")} className={`py-2 text-[10px] font-black uppercase tracking-widest rounded-lg transition-colors ${manageGameMode === "create" ? "bg-white text-[#005696] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>Create</button>
+												<button type="button" onClick={() => setManageGameMode("edit")} className={`py-2 text-[10px] font-black uppercase tracking-widest rounded-lg transition-colors ${manageGameMode === "edit" ? "bg-white text-[#005696] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>Edit</button>
+											</div>
 
-											<form onSubmit={(event) => { void saveGameEdits(event); }} className="space-y-2 border border-gray-100 rounded-xl p-3">
-												<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Edit Existing Game</p>
-												<select value={editGameId} onChange={(event) => {
-													const target = localGames.find((entry) => entry._id === event.target.value);
-													setEditGameId(event.target.value);
-													setEditGameName(target?.name ?? "");
-													setEditGameScoreUnit(target?.scoreUnit ?? "maximum points");
-													setEditGameScoringMode(target?.scoringMode ?? "INDIVIDUAL");
-												}} className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]">
-													<option value="">Select game</option>
-													{localGames.map((game) => <option key={game._id} value={game._id}>{game.name}</option>)}
-												</select>
-												<input value={editGameName} onChange={(event) => setEditGameName(event.target.value)} placeholder="Game name" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
-												<select value={editGameScoringMode} onChange={(event) => setEditGameScoringMode(event.target.value as "INDIVIDUAL" | "CUMULATIVE")} className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]">
-													<option value="INDIVIDUAL">INDIVIDUAL</option>
-													<option value="CUMULATIVE">CUMULATIVE</option>
-												</select>
-												<input value={editGameScoreUnit} onChange={(event) => setEditGameScoreUnit(event.target.value)} placeholder="Score unit" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
-												<button disabled={manageBusy} className="w-full py-2 rounded-xl bg-[#005696] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#004477] disabled:opacity-60">Save Game Changes</button>
-											</form>
+											{manageGameMode === "create" ? (
+												<form onSubmit={(event) => { void addGame(event); }} className="space-y-2 border border-gray-100 rounded-xl p-3">
+													<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Create Game</p>
+													<input value={newGameName} onChange={(event) => setNewGameName(event.target.value)} placeholder="Game name" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+													<input value={newGameScoreUnit} onChange={(event) => setNewGameScoreUnit(event.target.value)} placeholder="Score unit (maximum points)" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+													<button disabled={manageBusy} className="w-full py-2 rounded-xl bg-[#005696] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#004477] disabled:opacity-60">Create Game</button>
+												</form>
+											) : (
+												<form onSubmit={(event) => { void saveGameEdits(event); }} className="space-y-2 border border-gray-100 rounded-xl p-3">
+													<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Edit Existing Game</p>
+													<select value={editGameId} onChange={(event) => {
+														const target = localGames.find((entry) => entry._id === event.target.value);
+														setEditGameId(event.target.value);
+														setEditGameName(target?.name ?? "");
+														setEditGameScoreUnit(target?.scoreUnit ?? "maximum points");
+														setEditGameScoringMode(target?.scoringMode ?? "INDIVIDUAL");
+													}} className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]">
+														<option value="">Select game to edit</option>
+														{localGames.map((game) => <option key={game._id} value={game._id}>{game.name}</option>)}
+													</select>
+													{editGameId ? (
+														<>
+															<input value={editGameName} onChange={(event) => setEditGameName(event.target.value)} placeholder="Game name" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+															<select value={editGameScoringMode} onChange={(event) => setEditGameScoringMode(event.target.value as "INDIVIDUAL" | "CUMULATIVE")} className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]">
+																<option value="INDIVIDUAL">INDIVIDUAL</option>
+																<option value="CUMULATIVE">CUMULATIVE</option>
+															</select>
+															<input value={editGameScoreUnit} onChange={(event) => setEditGameScoreUnit(event.target.value)} placeholder="Score unit" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+															<button disabled={manageBusy} className="w-full py-2 rounded-xl bg-[#005696] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#004477] disabled:opacity-60">Save Game Changes</button>
+														</>
+													) : (
+														<p className="rounded-xl border border-dashed border-gray-200 bg-gray-50 px-3 py-4 text-xs font-bold text-gray-400">Select a game first to reveal edit options.</p>
+													)}
+												</form>
+											)}
 										</div>
 									)}
 
