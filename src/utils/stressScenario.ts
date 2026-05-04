@@ -319,7 +319,7 @@ export async function runStressScenario(params: RunStressScenarioParams): Promis
 
   const players = Array.from({ length: options.playerCount }, (_, index) => ({
     displayName: `Stress Player ${index + 1}`,
-    email: `stress-player-${Date.now()}-${index + 1}@example.com`,
+    email: `stress-player-${Date.now()}-${index + 1}@petsmart.com`,
     externalId: `stress-player-${Date.now()}-${index + 1}`
   }));
 

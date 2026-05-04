@@ -18,7 +18,8 @@ const eventGameSchema = new Schema(
       maxEntriesPerPlayer: { type: Number },
       roundsEnabled: { type: Boolean, default: false },
       totalRounds: { type: Number },
-      maxPointsPerRound: { type: Number }
+      maxPointsPerRound: { type: Number },
+      roundMaxPoints: [{ type: Number }]
     }
   },
   { timestamps: true }

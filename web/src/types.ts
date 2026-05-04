@@ -1,3 +1,11 @@
+export type AppRole = "ADMIN" | "PLAYER" | "SUPER_ADMIN";
+
+export interface LoginResponse {
+  token: string;
+  role: AppRole;
+  playerId?: string;
+}
+
 export interface EventRecord {
   _id: string;
   name: string;
@@ -35,11 +43,13 @@ export interface EventGameRecord {
   joinToken: string;
   title?: string;
   settings?: {
+    scoringAuthority?: "ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID";
     allowNegativeScores?: boolean;
     maxEntriesPerPlayer?: number;
     roundsEnabled?: boolean;
     totalRounds?: number;
     maxPointsPerRound?: number;
+    roundMaxPoints?: number[];
   };
 }
 
@@ -59,6 +69,17 @@ export interface JoinResponse {
   eventGameId: string;
   playerId: string;
   displayName: string;
+  joinSessionToken: string;
+}
+
+export interface JoinSessionStateResponse {
+  playerId: string;
+  eventGameId: string;
+  entries: number;
+  totalPoints: number;
+  completedRounds: number[];
+  nextRoundNumber: number | null;
+  isComplete: boolean;
 }
 
 export interface JoinTokenMetaResponse {
@@ -70,6 +91,7 @@ export interface JoinTokenMetaResponse {
       roundsEnabled?: boolean;
       totalRounds?: number;
       maxPointsPerRound?: number;
+      roundMaxPoints?: number[];
     };
     scoringAuthority?: "ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID";
     event: { _id: string; name: string } | null;
@@ -100,6 +122,7 @@ export interface LeaderboardEntry {
   rank: number;
   playerId: string;
   displayName: string;
+  email?: string;
   totalPoints: number;
   entries: number;
   lastScoredAt?: string;
@@ -192,4 +215,40 @@ export interface StressScenarioSummary {
 export interface StressScenarioResponse {
   summary: StressScenarioSummary;
   logs: string[];
+}
+
+export interface CreateAdminUserResponse {
+  userId: string;
+  email: string;
+  role: AppRole;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface AdminUserRecord {
+  userId: string;
+  email: string;
+  role: AppRole;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface PublicEventLeaderboardResponse {
+  event: {
+    _id: string;
+    name: string;
+    code: string;
+    status: "DRAFT" | "LIVE" | "CLOSED";
+  };
+  overallTop3: LeaderboardEntry[];
+  byLocation: Array<{
+    locationId: string;
+    locationName: string;
+    leaderboard: LeaderboardEntry[];
+  }>;
+  byGame: Array<{
+    gameId: string;
+    gameName: string;
+    leaderboard: LeaderboardEntry[];
+  }>;
 }

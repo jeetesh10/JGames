@@ -9,7 +9,7 @@ import { customAlphabet } from "nanoid";
 import QRCode from "qrcode";
 import { z } from "zod";
 
-import { hashPassword, signAuthToken, verifyPassword } from "./auth.js";
+import { hashPassword, signAuthToken, signJoinSessionToken, verifyJoinSessionToken, verifyPassword } from "./auth.js";
 import { config } from "./config.js";
 import { requireAuth, requireRole } from "./middleware/auth.js";
 import { EventGameModel } from "./models/EventGame.js";
@@ -27,6 +27,7 @@ const joinTokenGenerator = customAlphabet("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", 10
 const adminTokenGenerator = customAlphabet("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", 16);
 const eventCodeGenerator = customAlphabet("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", 8);
 const frontendDistPath = join(dirname(fileURLToPath(import.meta.url)), "..", "web", "dist");
+const PETSMART_EMAIL_DOMAIN = "@petsmart.com";
 
 const createEventSchema = z.object({
   name: z.string().min(2),
@@ -99,7 +100,8 @@ const createEventGameSchema = z.object({
       maxEntriesPerPlayer: z.number().int().positive().optional(),
       roundsEnabled: z.boolean().optional(),
       totalRounds: z.number().int().positive().optional(),
-      maxPointsPerRound: z.number().positive().optional()
+      maxPointsPerRound: z.number().positive().optional(),
+      roundMaxPoints: z.array(z.number().positive()).optional()
     })
     .optional()
 });
@@ -114,7 +116,8 @@ const updateEventGameSchema = z
         maxEntriesPerPlayer: z.number().int().positive().nullable().optional(),
         roundsEnabled: z.boolean().optional(),
         totalRounds: z.number().int().positive().nullable().optional(),
-        maxPointsPerRound: z.number().positive().nullable().optional()
+        maxPointsPerRound: z.number().positive().nullable().optional(),
+        roundMaxPoints: z.array(z.number().positive()).nullable().optional()
       })
       .optional()
   })
@@ -122,7 +125,10 @@ const updateEventGameSchema = z
 
 const joinSchema = z.object({
   displayName: z.string().min(2),
-  email: z.string().email().optional(),
+  email: z
+    .string()
+    .email()
+    .refine((value) => value.toLowerCase().endsWith(PETSMART_EMAIL_DOMAIN), "Email must be a valid petsmart.com address"),
   externalId: z.string().optional(),
   metadata: z.record(z.string(), z.unknown()).optional()
 });
@@ -134,7 +140,10 @@ const loginSchema = z.object({
 
 const playerRegisterSchema = z
   .object({
-    email: z.string().email(),
+    email: z
+      .string()
+      .email()
+      .refine((value) => value.toLowerCase().endsWith(PETSMART_EMAIL_DOMAIN), "Email must be a valid petsmart.com address"),
     password: z.string().min(8),
     playerId: z.string().optional()
   })
@@ -149,15 +158,44 @@ const scoreSchema = z.object({
 });
 
 const joinScoreSchema = z.object({
-  playerId: z.string(),
   points: z.number(),
-  roundNumber: z.number().int().positive().optional(),
-  source: z.enum(["MANUAL", "AUTO", "SELF"]).optional()
+  roundNumber: z.number().int().positive().optional()
 });
+
+const createAdminUserSchema = z
+  .object({
+    email: z.string().email(),
+    password: z.string().min(8)
+  })
+  .strict();
+
+const updateAdminUserSchema = z
+  .object({
+    email: z.string().email().optional(),
+    password: z.string().min(8).optional()
+  })
+  .strict();
+
+const changePasswordSchema = z
+  .object({
+    currentPassword: z.string().min(1),
+    newPassword: z.string().min(8)
+  })
+  .strict();
 
 type ScoreActorContext = {
   actorType: "ADMIN" | "GAME_ADMIN" | "PLAYER";
   playerId?: string;
+};
+
+type JoinSessionState = {
+  playerId: string;
+  eventGameId: string;
+  entries: number;
+  totalPoints: number;
+  completedRounds: number[];
+  nextRoundNumber: number | null;
+  isComplete: boolean;
 };
 
 const stressScenarioSchema = z
@@ -202,6 +240,15 @@ function routeParam(value: string | string[]): string {
   return Array.isArray(value) ? value[0] : value;
 }
 
+function joinSessionTokenFromRequest(req: Request): string | null {
+  const headerToken = req.header("x-join-session-token");
+  if (headerToken && headerToken.trim()) {
+    return headerToken.trim();
+  }
+
+  return null;
+}
+
 function gameAdminTokenFromRequest(req: Request): string | null {
   const queryToken = req.query.adminToken;
   if (typeof queryToken === "string" && queryToken.trim()) {
@@ -214,6 +261,36 @@ function gameAdminTokenFromRequest(req: Request): string | null {
   }
 
   return null;
+}
+
+function assertRoundSettings(params: {
+  roundsEnabled?: boolean;
+  totalRounds?: number | null;
+  roundMaxPoints?: number[] | null;
+}): void {
+  const { roundsEnabled, totalRounds, roundMaxPoints } = params;
+
+  if (!roundMaxPoints || roundMaxPoints.length === 0) {
+    return;
+  }
+
+  if (!roundsEnabled) {
+    throw new AppError(400, "roundMaxPoints can only be set when rounds are enabled");
+  }
+
+  if (totalRounds && roundMaxPoints.length !== totalRounds) {
+    throw new AppError(400, "roundMaxPoints count must match totalRounds");
+  }
+}
+
+function assertSuperAdminUser(req: Request): void {
+  if (!req.auth || req.auth.role !== "SUPER_ADMIN") {
+    throw new AppError(403, "Super admin access required");
+  }
+
+  if (req.auth.email.toLowerCase() !== config.superAdminEmail) {
+    throw new AppError(403, "Only the designated super admin can manage admin users");
+  }
 }
 
 function isLoopbackHost(hostname: string): boolean {
@@ -442,6 +519,7 @@ async function createScoreEntryForEventGame(payload: z.infer<typeof scoreSchema>
   const roundsEnabled = eventGame.settings?.roundsEnabled ?? false;
   const totalRounds = eventGame.settings?.totalRounds;
   const maxPointsPerRound = eventGame.settings?.maxPointsPerRound;
+  const roundMaxPoints = eventGame.settings?.roundMaxPoints;
 
   if (roundsEnabled) {
     if (!payload.roundNumber) {
@@ -464,14 +542,27 @@ async function createScoreEntryForEventGame(payload: z.infer<typeof scoreSchema>
     throw new AppError(400, "roundNumber is only allowed for games configured with rounds");
   }
 
-  if (maxPointsPerRound != null && payload.points > maxPointsPerRound) {
+  if (roundsEnabled && payload.roundNumber && Array.isArray(roundMaxPoints) && roundMaxPoints.length > 0) {
+    const maxPointsForRound = roundMaxPoints[payload.roundNumber - 1];
+    if (typeof maxPointsForRound === "number" && payload.points > maxPointsForRound) {
+      throw new AppError(400, `points cannot exceed configured max for round ${payload.roundNumber} (${maxPointsForRound})`);
+    }
+  } else if (maxPointsPerRound != null && payload.points > maxPointsPerRound) {
     throw new AppError(400, `points cannot exceed configured maxPointsPerRound (${maxPointsPerRound})`);
   }
 
-  const maxEntries = eventGame.settings?.maxEntriesPerPlayer;
-  if (maxEntries) {
+  const configuredMaxEntries = eventGame.settings?.maxEntriesPerPlayer;
+  const effectiveMaxEntries =
+    configuredMaxEntries
+    ?? (actor.actorType === "PLAYER"
+      ? roundsEnabled
+        ? totalRounds ?? undefined
+        : 1
+      : undefined);
+
+  if (effectiveMaxEntries) {
     const currentEntries = await ScoreEntryModel.countDocuments({ eventGameId, playerId });
-    if (currentEntries >= maxEntries) {
+    if (currentEntries >= effectiveMaxEntries) {
       throw new AppError(409, "Maximum score entries reached for player in this game");
     }
   }
@@ -488,6 +579,61 @@ async function createScoreEntryForEventGame(payload: z.infer<typeof scoreSchema>
   });
 
   return score;
+}
+
+async function buildJoinSessionState(joinToken: string, playerId: string): Promise<JoinSessionState> {
+  const eventGame = await EventGameModel.findOne({ joinToken }).lean();
+  if (!eventGame) {
+    throw new AppError(404, "Join token not found");
+  }
+
+  const playerObjectId = asObjectId(playerId);
+  const scores = await ScoreEntryModel.find({
+    eventGameId: eventGame._id,
+    playerId: playerObjectId
+  })
+    .sort({ roundNumber: 1, createdAt: 1 })
+    .lean();
+
+  const completedRounds = scores
+    .map((score) => score.roundNumber)
+    .filter((roundNumber): roundNumber is number => typeof roundNumber === "number")
+    .sort((left, right) => left - right);
+
+  const totalPoints = scores.reduce((sum, score) => sum + score.points, 0);
+  const roundsEnabled = eventGame.settings?.roundsEnabled ?? false;
+  const totalRounds = eventGame.settings?.totalRounds;
+  const effectiveMaxEntries = eventGame.settings?.maxEntriesPerPlayer ?? (roundsEnabled ? totalRounds ?? undefined : 1);
+  const nextRoundNumber = roundsEnabled
+    ? (() => {
+        if (totalRounds) {
+          for (let round = 1; round <= totalRounds; round += 1) {
+            if (!completedRounds.includes(round)) {
+              return round;
+            }
+          }
+          return null;
+        }
+
+        return completedRounds.length + 1;
+      })()
+    : scores.length === 0
+      ? 1
+      : null;
+
+  const isComplete = effectiveMaxEntries != null
+    ? scores.length >= effectiveMaxEntries
+    : (roundsEnabled && totalRounds != null ? completedRounds.length >= totalRounds : false);
+
+  return {
+    playerId,
+    eventGameId: String(eventGame._id),
+    entries: scores.length,
+    totalPoints,
+    completedRounds,
+    nextRoundNumber,
+    isComplete
+  };
 }
 
 const app = express();
@@ -518,6 +664,7 @@ app.post(
     const token = signAuthToken({
       userId: String(user._id),
       role: user.role,
+      email: user.email,
       playerId: user.playerId ? String(user.playerId) : undefined
     });
 
@@ -565,6 +712,7 @@ app.post(
     const token = signAuthToken({
       userId: String(user._id),
       role: "PLAYER",
+      email: user.email,
       playerId: String(playerId)
     });
 
@@ -593,6 +741,127 @@ app.post(
       endsAt: payload.endsAt ? new Date(payload.endsAt) : undefined
     });
     res.status(201).json(created);
+  })
+);
+
+app.post(
+  "/api/admin/users",
+  requireAuth,
+  requireRole(["SUPER_ADMIN"]),
+  asyncHandler(async (req, res) => {
+    assertSuperAdminUser(req);
+    const payload = parseOrThrow(createAdminUserSchema, req.body);
+    const normalizedEmail = payload.email.toLowerCase().trim();
+
+    const existingUser = await UserModel.findOne({ email: normalizedEmail });
+    if (existingUser) {
+      throw new AppError(409, "User already exists");
+    }
+
+    const passwordHash = await hashPassword(payload.password);
+    const created = await UserModel.create({
+      email: normalizedEmail,
+      passwordHash,
+      role: "ADMIN"
+    });
+
+    res.status(201).json({
+      userId: String(created._id),
+      email: created.email,
+      role: created.role
+    });
+  })
+);
+
+app.get(
+  "/api/admin/users",
+  requireAuth,
+  requireRole(["SUPER_ADMIN"]),
+  asyncHandler(async (req, res) => {
+    assertSuperAdminUser(req);
+
+    const users = await UserModel.find({ role: "ADMIN" })
+      .sort({ createdAt: -1 })
+      .select({ _id: 1, email: 1, role: 1, createdAt: 1, updatedAt: 1 })
+      .lean();
+
+    res.json(
+      users.map((user) => ({
+        userId: String(user._id),
+        email: user.email,
+        role: user.role,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt
+      }))
+    );
+  })
+);
+
+app.patch(
+  "/api/admin/users/:userId",
+  requireAuth,
+  requireRole(["SUPER_ADMIN"]),
+  asyncHandler(async (req, res) => {
+    assertSuperAdminUser(req);
+    const userId = asObjectId(routeParam(req.params.userId));
+    const payload = parseOrThrow(updateAdminUserSchema, req.body);
+
+    if (Object.keys(payload).length === 0) {
+      throw new AppError(400, "No fields provided for update");
+    }
+
+    const user = await UserModel.findOne({ _id: userId, role: "ADMIN" });
+    if (!user) {
+      throw new AppError(404, "Admin user not found");
+    }
+
+    if (payload.email) {
+      const normalizedEmail = payload.email.toLowerCase().trim();
+      const existingUser = await UserModel.findOne({ email: normalizedEmail, _id: { $ne: userId } }).lean();
+      if (existingUser) {
+        throw new AppError(409, "User already exists");
+      }
+      user.email = normalizedEmail;
+    }
+
+    if (payload.password) {
+      user.passwordHash = await hashPassword(payload.password);
+    }
+
+    await user.save();
+
+    res.json({
+      userId: String(user._id),
+      email: user.email,
+      role: user.role,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt
+    });
+  })
+);
+
+app.post(
+  "/api/auth/change-password",
+  requireAuth,
+  requireRole(["SUPER_ADMIN"]),
+  asyncHandler(async (req, res) => {
+    assertSuperAdminUser(req);
+    const payload = parseOrThrow(changePasswordSchema, req.body);
+
+    const currentUser = await UserModel.findById(req.auth?.userId);
+    if (!currentUser) {
+      throw new AppError(404, "User not found");
+    }
+
+    const ok = await verifyPassword(payload.currentPassword, currentUser.passwordHash);
+    if (!ok) {
+      throw new AppError(401, "Current password is incorrect");
+    }
+
+    currentUser.passwordHash = await hashPassword(payload.newPassword);
+    await currentUser.save();
+
+    res.json({ message: "Password updated" });
   })
 );
 
@@ -763,6 +1032,11 @@ app.post(
   requireRole(["ADMIN"]),
   asyncHandler(async (req, res) => {
     const payload = parseOrThrow(createEventGameSchema, req.body);
+    assertRoundSettings({
+      roundsEnabled: payload.settings?.roundsEnabled,
+      totalRounds: payload.settings?.totalRounds,
+      roundMaxPoints: payload.settings?.roundMaxPoints
+    });
 
     const eventId = asObjectId(payload.eventId);
     const locationId = asObjectId(payload.locationId);
@@ -843,6 +1117,7 @@ app.patch(
         roundsEnabled?: boolean;
         totalRounds?: number | null;
         maxPointsPerRound?: number | null;
+        roundMaxPoints?: number[] | null;
       };
     } = {};
 
@@ -851,13 +1126,20 @@ app.patch(
     }
 
     if (payload.settings) {
+      assertRoundSettings({
+        roundsEnabled: payload.settings.roundsEnabled,
+        totalRounds: payload.settings.totalRounds,
+        roundMaxPoints: payload.settings.roundMaxPoints
+      });
+
       updates.settings = {
         scoringAuthority: payload.settings.scoringAuthority ?? null,
         allowNegativeScores: payload.settings.allowNegativeScores,
         maxEntriesPerPlayer: payload.settings.maxEntriesPerPlayer ?? null,
         roundsEnabled: payload.settings.roundsEnabled,
         totalRounds: payload.settings.totalRounds ?? null,
-        maxPointsPerRound: payload.settings.maxPointsPerRound ?? null
+        maxPointsPerRound: payload.settings.maxPointsPerRound ?? null,
+        roundMaxPoints: payload.settings.roundMaxPoints ?? null
       };
     }
 
@@ -886,22 +1168,32 @@ app.get(
       throw new AppError(404, "Event game not found");
     }
 
-    let adminToken = eventGame.adminToken;
-    if (!adminToken) {
-      adminToken = adminTokenGenerator();
-      await EventGameModel.updateOne(
-        { _id: eventGameId },
-        { $set: { adminToken } }
-      );
+    const event = await EventModel.findById(eventGame.eventId).lean();
+    const scoringAuthority = eventGame.settings?.scoringAuthority ?? event?.scoringAuthority ?? "ADMIN_ONLY";
+    const includeAdminQr = scoringAuthority !== "PLAYER_SELF";
+
+    let adminToken: string | undefined;
+    if (includeAdminQr) {
+      adminToken = eventGame.adminToken ?? undefined;
+      if (!adminToken) {
+        adminToken = adminTokenGenerator();
+        await EventGameModel.updateOne(
+          { _id: eventGameId },
+          { $set: { adminToken } }
+        );
+      }
     }
 
     const appBaseUrl = resolveAppBaseUrl(req);
     const playerUrl = `${appBaseUrl}/join/${eventGame.joinToken}`;
-    const adminUrl = `${appBaseUrl}/game-admin/${eventGameId}?adminToken=${encodeURIComponent(adminToken)}`;
-    const [playerQrCodeDataUrl, adminQrCodeDataUrl] = await Promise.all([
-      createBrandedQrDataUrl(playerUrl),
-      createBrandedQrDataUrl(adminUrl)
-    ]);
+    const playerQrCodeDataUrl = await createBrandedQrDataUrl(playerUrl);
+
+    let adminUrl: string | undefined;
+    let adminQrCodeDataUrl: string | undefined;
+    if (includeAdminQr && adminToken) {
+      adminUrl = `${appBaseUrl}/game-admin/${eventGameId}?adminToken=${encodeURIComponent(adminToken)}`;
+      adminQrCodeDataUrl = await createBrandedQrDataUrl(adminUrl);
+    }
 
     res.json({
       eventGameId,
@@ -911,8 +1203,8 @@ app.get(
       qrCodeDataUrl: playerQrCodeDataUrl,
       playerUrl,
       playerQrCodeDataUrl,
-      adminUrl,
-      adminQrCodeDataUrl
+      ...(adminUrl ? { adminUrl } : {}),
+      ...(adminQrCodeDataUrl ? { adminQrCodeDataUrl } : {})
     });
   })
 );
@@ -942,7 +1234,8 @@ app.get(
           scoringAuthority: eventGame.settings?.scoringAuthority ?? event?.scoringAuthority ?? "ADMIN_ONLY",
           roundsEnabled: eventGame.settings?.roundsEnabled ?? false,
           totalRounds: eventGame.settings?.totalRounds,
-          maxPointsPerRound: eventGame.settings?.maxPointsPerRound
+          maxPointsPerRound: eventGame.settings?.maxPointsPerRound,
+          roundMaxPoints: eventGame.settings?.roundMaxPoints
         },
         event: event ? { _id: String(event._id), name: event.name } : null,
         location: location ? { _id: String(location._id), name: location.name } : null,
@@ -956,7 +1249,7 @@ app.get(
 app.post(
   "/api/join/:joinToken",
   asyncHandler(async (req, res) => {
-    const { joinToken } = req.params;
+    const joinToken = routeParam(req.params.joinToken);
     const payload = parseOrThrow(joinSchema, req.body);
 
     const eventGame = await EventGameModel.findOne({ joinToken });
@@ -976,17 +1269,24 @@ app.post(
     if (!player) {
       player = await PlayerModel.create({
         displayName: payload.displayName,
-        email: payload.email?.toLowerCase(),
+        email: payload.email.toLowerCase(),
         externalId: payload.externalId,
         metadata: payload.metadata
       });
     } else {
       player.displayName = payload.displayName;
-      if (payload.email) player.email = payload.email.toLowerCase();
+      player.email = payload.email.toLowerCase();
       if (payload.externalId) player.externalId = payload.externalId;
       if (payload.metadata) player.metadata = payload.metadata;
       await player.save();
     }
+
+    const joinSessionToken = signJoinSessionToken({
+      eventGameId: String(eventGame._id),
+      joinToken,
+      playerId: String(player._id),
+      email: payload.email.toLowerCase()
+    });
 
     await ParticipationModel.updateOne(
       {
@@ -1006,8 +1306,40 @@ app.post(
       message: "Joined successfully",
       eventGameId: eventGame._id,
       playerId: player._id,
-      displayName: player.displayName
+      displayName: player.displayName,
+      joinSessionToken
     });
+  })
+);
+
+app.get(
+  "/api/join/:joinToken/session-state",
+  asyncHandler(async (req, res) => {
+    const joinToken = routeParam(req.params.joinToken);
+    const joinSessionToken = joinSessionTokenFromRequest(req);
+
+    if (!joinSessionToken) {
+      throw new AppError(401, "Join session token is required");
+    }
+
+    let joinSession;
+    try {
+      joinSession = verifyJoinSessionToken(joinSessionToken);
+    } catch {
+      throw new AppError(401, "Invalid or expired join session token");
+    }
+
+    if (joinSession.joinToken !== joinToken) {
+      throw new AppError(403, "Join session token does not match this game session");
+    }
+
+    const state = await buildJoinSessionState(joinToken, joinSession.playerId);
+
+    if (state.eventGameId !== joinSession.eventGameId) {
+      throw new AppError(403, "Join session token does not match this game session");
+    }
+
+    res.json(state);
   })
 );
 
@@ -1016,20 +1348,37 @@ app.post(
   asyncHandler(async (req, res) => {
     const joinToken = routeParam(req.params.joinToken);
     const payload = parseOrThrow(joinScoreSchema, req.body);
+    const joinSessionToken = joinSessionTokenFromRequest(req);
+
+    if (!joinSessionToken) {
+      throw new AppError(401, "Join session token is required");
+    }
 
     const eventGame = await EventGameModel.findOne({ joinToken }).lean();
     if (!eventGame) {
       throw new AppError(404, "Join token not found");
     }
 
+    let joinSession;
+    try {
+      joinSession = verifyJoinSessionToken(joinSessionToken);
+    } catch {
+      throw new AppError(401, "Invalid or expired join session token");
+    }
+
+    if (joinSession.joinToken !== joinToken || joinSession.eventGameId !== String(eventGame._id)) {
+      throw new AppError(403, "Join session token does not match this game session");
+    }
+
     const score = await createScoreEntryForEventGame(
       {
         ...payload,
-        eventGameId: String(eventGame._id)
+        eventGameId: String(eventGame._id),
+        playerId: joinSession.playerId
       },
       {
         actorType: "PLAYER",
-        playerId: payload.playerId
+        playerId: joinSession.playerId
       }
     );
 
@@ -1132,6 +1481,7 @@ app.post(
 interface LeaderboardAggregateRow {
   playerId: unknown;
   displayName: string;
+  email?: string;
   totalPoints: number;
   entries: number;
   lastScoredAt?: Date;
@@ -1141,6 +1491,7 @@ interface LeaderboardEntryView {
   rank: number;
   playerId: string;
   displayName: string;
+  email?: string;
   totalPoints: number;
   entries: number;
   lastScoredAt?: string;
@@ -1171,6 +1522,7 @@ async function leaderboardByMatch(match: Record<string, unknown>, limit: number)
         _id: 0,
         playerId: "$_id",
         displayName: "$player.displayName",
+        email: "$player.email",
         totalPoints: 1,
         entries: 1,
         lastScoredAt: 1
@@ -1189,11 +1541,66 @@ async function leaderboardByMatch(match: Record<string, unknown>, limit: number)
     rank: index + 1,
     playerId: String(entry.playerId),
     displayName: entry.displayName,
+    email: entry.email,
     totalPoints: entry.totalPoints,
     entries: entry.entries,
     lastScoredAt: entry.lastScoredAt instanceof Date ? entry.lastScoredAt.toISOString() : undefined
   }));
 }
+
+app.get(
+  "/api/public/leaderboards/event/:eventId",
+  asyncHandler(async (req, res) => {
+    const eventId = asObjectId(routeParam(req.params.eventId));
+    const event = await EventModel.findById(eventId).lean();
+
+    if (!event) {
+      throw new AppError(404, "Event not found");
+    }
+
+    const [locations, eventGames] = await Promise.all([
+      LocationModel.find({ eventId }).sort({ name: 1 }).lean(),
+      EventGameModel.find({ eventId }).lean()
+    ]);
+
+    const gameIds = Array.from(new Set(eventGames.map((item) => String(item.gameId))));
+    const games = gameIds.length > 0
+      ? await GameModel.find({ _id: { $in: gameIds.map((id) => asObjectId(id)) } }).lean()
+      : [];
+
+    const gameNameById = new Map(games.map((game) => [String(game._id), game.name]));
+
+    const [overallTop3, locationTop3, gameTop3] = await Promise.all([
+      leaderboardByMatch({ eventId }, 3),
+      Promise.all(
+        locations.map(async (location) => ({
+          locationId: String(location._id),
+          locationName: location.name,
+          leaderboard: await leaderboardByMatch({ eventId, locationId: location._id }, 3)
+        }))
+      ),
+      Promise.all(
+        gameIds.map(async (gameId) => ({
+          gameId,
+          gameName: gameNameById.get(gameId) ?? "Unknown Game",
+          leaderboard: await leaderboardByMatch({ eventId, gameId: asObjectId(gameId) }, 3)
+        }))
+      )
+    ]);
+
+    res.json({
+      event: {
+        _id: String(event._id),
+        name: event.name,
+        code: event.code,
+        status: event.status
+      },
+      overallTop3,
+      byLocation: locationTop3,
+      byGame: gameTop3.sort((left, right) => left.gameName.localeCompare(right.gameName))
+    });
+  })
+);
 
 app.get(
   "/api/dashboard/summary",
@@ -1236,16 +1643,23 @@ app.post(
     }
 
     const logs: string[] = [];
-    const apiBaseUrl = resolveAppBaseUrl(req);
+    // Keep stress scenario traffic inside this process to avoid external proxy auth header stripping.
+    const apiBaseUrl = `http://127.0.0.1:${config.port}`;
 
-    const summary = await runStressScenario({
-      apiBaseUrl,
-      adminToken: token,
-      options: payload,
-      log: (line) => {
-        logs.push(line);
-      }
-    });
+    let summary;
+    try {
+      summary = await runStressScenario({
+        apiBaseUrl,
+        adminToken: token,
+        options: payload,
+        log: (line) => {
+          logs.push(line);
+        }
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Stress scenario failed";
+      throw new AppError(400, message);
+    }
 
     res.json({ summary, logs });
   })
@@ -1344,7 +1758,7 @@ app.get(
     }
 
     let targetPlayerId = req.auth.playerId;
-    if (req.auth.role === "ADMIN" && typeof req.query.playerId === "string") {
+    if ((req.auth.role === "ADMIN" || req.auth.role === "SUPER_ADMIN") && typeof req.query.playerId === "string") {
       targetPlayerId = req.query.playerId;
     }
 
@@ -1415,8 +1829,7 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     return;
   }
 
-  const message = err instanceof Error ? err.message : "Unexpected server error";
-  res.status(500).json({ error: message });
+  res.status(500).json({ error: "Unexpected server error" });
 });
 
 export { app };

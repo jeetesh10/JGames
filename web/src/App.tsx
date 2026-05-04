@@ -29,12 +29,17 @@ import QRCodeLib from "qrcode";
 
 import { apiRequest, ApiError } from "./api";
 import type {
+	AppRole,
+	LoginResponse,
+	CreateAdminUserResponse,
+	AdminUserRecord,
 	EventRecord,
 	GameRecord,
 	LocationRecord,
 	EventGameRecord,
 	JoinLinkResponse,
 	JoinResponse,
+	JoinSessionStateResponse,
 	JoinTokenMetaResponse,
 	LeaderboardEntry,
 	LeaderboardResponse,
@@ -42,12 +47,36 @@ import type {
 	EventGameParticipantsResponse,
 	ScoreEntryRecord,
 	StressScenarioRequest,
-	StressScenarioResponse
+	StressScenarioResponse,
+	PublicEventLeaderboardResponse
 } from "./types";
 
 // ─── Auth helpers ─────────────────────────────────────────────────────────────
 const TOKEN_KEY = "jgames.adminToken";
-const getToken = () => localStorage.getItem(TOKEN_KEY) ?? "";
+const ROLE_KEY = "jgames.adminRole";
+const JOIN_SESSION_PREFIX = "jgames.joinSession.";
+
+function getAuthState(): { token: string; role: AppRole | "" } {
+	return {
+		token: localStorage.getItem(TOKEN_KEY) ?? "",
+		role: (localStorage.getItem(ROLE_KEY) as AppRole | null) ?? ""
+	};
+}
+
+function getToken(): string {
+	return getAuthState().token;
+}
+
+function isPetsmartEmail(value: string): boolean {
+	return value.trim().toLowerCase().endsWith("@petsmart.com");
+}
+
+function parseRoundMaxPointsCsv(csv: string): number[] {
+	return csv
+		.split(",")
+		.map((entry) => Number(entry.trim()))
+		.filter((value) => Number.isFinite(value) && value > 0);
+}
 
 function authed<T>(path: string, token: string, init: RequestInit = {}) {
 	return apiRequest<T>(path, {
@@ -121,12 +150,38 @@ function escapeHtml(value: string) {
 		.replaceAll("'", "&#39;");
 }
 
-function printQrCards(items: Array<{ label: string; dataUrl?: string; url: string }>) {
-	const printable = items.filter((item) => Boolean(item.dataUrl));
-	if (printable.length === 0) return;
+function openPrintPopup(): Window | null {
+	const popup = window.open("", "_blank", "width=920,height=760");
+	if (!popup) return null;
 
-	const popup = window.open("", "_blank", "noopener,noreferrer,width=920,height=760");
-	if (!popup) return;
+	popup.document.write(`<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Preparing QR Print...</title>
+  <style>
+    body { margin: 0; padding: 24px; font-family: Arial, Helvetica, sans-serif; color: #111827; }
+  </style>
+</head>
+<body>
+  <p>Preparing printable QR code...</p>
+</body>
+</html>`);
+	popup.document.close();
+	return popup;
+}
+
+function printQrCards(items: Array<{ label: string; dataUrl?: string; url: string }>, popup?: Window | null) {
+	const printable = items.filter((item) => Boolean(item.dataUrl));
+	if (printable.length === 0) {
+		if (popup && !popup.closed) {
+			popup.document.body.innerHTML = "<p>No QR code content available to print.</p>";
+		}
+		return;
+	}
+
+	const targetPopup = popup && !popup.closed ? popup : openPrintPopup();
+	if (!targetPopup) return;
 
 	const cardsHtml = printable
 		.map((item) => {
@@ -136,7 +191,7 @@ function printQrCards(items: Array<{ label: string; dataUrl?: string; url: strin
 		})
 		.join("");
 
-	popup.document.write(`<!doctype html>
+	targetPopup.document.write(`<!doctype html>
 <html>
 <head>
   <meta charset="utf-8" />
@@ -159,7 +214,7 @@ function printQrCards(items: Array<{ label: string; dataUrl?: string; url: strin
   <script>window.addEventListener('load', function () { window.print(); });</script>
 </body>
 </html>`);
-  popup.document.close();
+	targetPopup.document.close();
 }
 
 function isLoopbackUrl(url: string): boolean {
@@ -213,6 +268,36 @@ async function ensureQrDataUrl(existingDataUrl: string | undefined, value: strin
 	} catch {
 		return undefined;
 	}
+}
+
+type StoredJoinSession = {
+	playerId: string;
+	eventGameId: string;
+	displayName: string;
+	email: string;
+	joinSessionToken: string;
+};
+
+function joinSessionStorageKey(joinToken: string): string {
+	return `${JOIN_SESSION_PREFIX}${joinToken}`;
+}
+
+function readStoredJoinSession(joinToken: string): StoredJoinSession | null {
+	try {
+		const raw = localStorage.getItem(joinSessionStorageKey(joinToken));
+		if (!raw) return null;
+		return JSON.parse(raw) as StoredJoinSession;
+	} catch {
+		return null;
+	}
+}
+
+function saveStoredJoinSession(joinToken: string, payload: StoredJoinSession): void {
+	localStorage.setItem(joinSessionStorageKey(joinToken), JSON.stringify(payload));
+}
+
+function clearStoredJoinSession(joinToken: string): void {
+	localStorage.removeItem(joinSessionStorageKey(joinToken));
 }
 
 // ─── QR renderer (uses backend data-URL when available) ──────────────────────
@@ -310,7 +395,7 @@ function QRDisplay({ dataUrl, value, size = 200 }: { dataUrl?: string; value?: s
 }
 
 // ─── Login Screen ─────────────────────────────────────────────────────────────
-function LoginScreen({ onLogin }: { onLogin: (token: string) => void }) {
+function LoginScreen({ onLogin }: { onLogin: (auth: { token: string; role: AppRole }) => void }) {
 	const [email, setEmail] = useState("");
 	const [password, setPassword] = useState("");
 	const [error, setError] = useState<string | null>(null);
@@ -321,13 +406,16 @@ function LoginScreen({ onLogin }: { onLogin: (token: string) => void }) {
 		setBusy(true);
 		setError(null);
 		try {
-			const result = await apiRequest<{ token: string; role: string }>("/api/auth/login", {
+			const result = await apiRequest<LoginResponse>("/api/auth/login", {
 				method: "POST",
 				body: JSON.stringify({ email, password }),
 			});
-			if (result.role !== "ADMIN") throw new ApiError("Not an admin account", 403);
+			if (result.role !== "ADMIN" && result.role !== "SUPER_ADMIN") {
+				throw new ApiError("Not an admin account", 403);
+			}
 			localStorage.setItem(TOKEN_KEY, result.token);
-			onLogin(result.token);
+			localStorage.setItem(ROLE_KEY, result.role);
+			onLogin({ token: result.token, role: result.role });
 		} catch (err) {
 			setError(err instanceof Error ? err.message : "Login failed");
 		} finally {
@@ -387,19 +475,376 @@ export function App() {
 			<Route path="/admin/*" element={<AdminApp />} />
 			<Route path="/join/:joinToken" element={<PlayerJoinPage />} />
 			<Route path="/game-admin/:eventGameId" element={<GameAdminPage />} />
+			<Route path="/leaderboard/event/:eventId" element={<PublicEventLeaderboardPage />} />
 			<Route path="*" element={<Navigate replace to="/admin" />} />
 		</Routes>
 	);
 }
 
-function AdminApp() {
-	const [token, setToken] = useState(getToken);
+function PublicEventLeaderboardPage() {
+	const { eventId = "" } = useParams();
+	const [payload, setPayload] = useState<PublicEventLeaderboardResponse | null>(null);
+	const [loading, setLoading] = useState(true);
+	const [error, setError] = useState<string | null>(null);
+	const [locationFilterMode, setLocationFilterMode] = useState<"all" | "only" | "hide">("all");
+	const [locationSelection, setLocationSelection] = useState<string[]>([]);
+	const [gameFilterMode, setGameFilterMode] = useState<"all" | "only" | "hide">("all");
+	const [gameSelection, setGameSelection] = useState<string[]>([]);
 
-	if (!token) {
-		return <LoginScreen onLogin={setToken} />;
+	useEffect(() => {
+		if (!eventId) {
+			setError("Missing event id");
+			setLoading(false);
+			return;
+		}
+
+		void (async () => {
+			setLoading(true);
+			setError(null);
+			try {
+				const result = await apiRequest<PublicEventLeaderboardResponse>(`/api/public/leaderboards/event/${eventId}`);
+				setPayload(result);
+			} catch (caught) {
+				setError(caught instanceof Error ? caught.message : "Unable to load leaderboard");
+			} finally {
+				setLoading(false);
+			}
+		})();
+	}, [eventId]);
+
+	useEffect(() => {
+		setLocationFilterMode("all");
+		setLocationSelection([]);
+		setGameFilterMode("all");
+		setGameSelection([]);
+	}, [payload?.event._id]);
+
+	function applyFilter<T extends { locationId?: string; gameId?: string }>(
+		items: T[],
+		selection: string[],
+		mode: "all" | "only" | "hide",
+		idSelector: (item: T) => string
+	): T[] {
+		if (mode === "all" || selection.length === 0) {
+			return items;
+		}
+
+		const selected = new Set(selection);
+		if (mode === "only") {
+			return items.filter((item) => selected.has(idSelector(item)));
+		}
+
+		return items.filter((item) => !selected.has(idSelector(item)));
 	}
 
-	return <AdminShell token={token} onLogout={() => { localStorage.removeItem(TOKEN_KEY); setToken(""); }} />;
+	function toggleSelection(current: string[], value: string): string[] {
+		if (current.includes(value)) {
+			return current.filter((entry) => entry !== value);
+		}
+
+		return [...current, value];
+	}
+
+	const filteredLocations = useMemo(() => {
+		if (!payload) return [];
+		return applyFilter(payload.byLocation, locationSelection, locationFilterMode, (item) => item.locationId);
+	}, [payload, locationSelection, locationFilterMode]);
+
+	const filteredGames = useMemo(() => {
+		if (!payload) return [];
+		return applyFilter(payload.byGame, gameSelection, gameFilterMode, (item) => item.gameId);
+	}, [payload, gameSelection, gameFilterMode]);
+
+	const filteredLocationLeaders = useMemo(
+		() => filteredLocations.flatMap((location) => location.leaderboard),
+		[filteredLocations]
+	);
+	const filteredGameLeaders = useMemo(
+		() => filteredGames.flatMap((game) => game.leaderboard),
+		[filteredGames]
+	);
+
+	function renderTopPlayers(players: LeaderboardEntry[], emptyLabel: string) {
+		if (players.length === 0) {
+			return <p className="text-sm font-bold text-gray-400">{emptyLabel}</p>;
+		}
+
+		return (
+			<div className="space-y-2">
+				{players.slice(0, 3).map((player) => (
+					<div key={player.playerId} className="rounded-xl border border-gray-100 bg-white p-3 flex items-center justify-between gap-3">
+						<div>
+							<p className="font-black text-sm text-[#005696]">#{player.rank} {player.displayName}</p>
+							<p className="text-xs text-gray-500 font-bold">{player.email ?? "No email"}</p>
+						</div>
+						<div className="text-right">
+							<p className="font-mono text-[#E31837] font-black text-lg">{player.totalPoints}</p>
+							<p className="text-[11px] text-gray-400 font-bold">{player.entries} entries</p>
+						</div>
+					</div>
+				))}
+			</div>
+		);
+	}
+
+	if (loading) {
+		return (
+			<div className="min-h-screen bg-[#F4F7F9] flex items-center justify-center p-6">
+				<p className="font-bold text-gray-400 animate-pulse">Loading public leaderboard...</p>
+			</div>
+		);
+	}
+
+	if (error || !payload) {
+		return (
+			<div className="min-h-screen bg-[#F4F7F9] flex items-center justify-center p-6">
+				<div className="bg-white border border-red-100 rounded-2xl p-6 max-w-lg w-full">
+					<p className="text-[#E31837] font-black text-lg">Unable to load leaderboard</p>
+					<p className="text-sm font-bold text-gray-500 mt-2">{error ?? "Unknown error"}</p>
+				</div>
+			</div>
+		);
+	}
+
+	const overallMaxPoints = Math.max(1, ...payload.overallTop3.map((entry) => entry.totalPoints));
+	const visibleLocations = filteredLocations.length;
+	const visibleGames = filteredGames.length;
+	const totalLocations = payload.byLocation.length;
+	const totalGames = payload.byGame.length;
+	const locationCoverage = totalLocations > 0 ? visibleLocations / totalLocations : 1;
+	const gameCoverage = totalGames > 0 ? visibleGames / totalGames : 1;
+	const coveragePercent = Math.round(((locationCoverage + gameCoverage) / 2) * 100);
+	const champion = payload.overallTop3[0] ?? null;
+	const visibleEntries = filteredLocationLeaders.length + filteredGameLeaders.length;
+	const visiblePoints = filteredLocationLeaders.reduce((sum, entry) => sum + entry.totalPoints, 0)
+		+ filteredGameLeaders.reduce((sum, entry) => sum + entry.totalPoints, 0);
+
+	return (
+		<div className="min-h-screen bg-gradient-to-b from-[#e8f4ff] via-[#f5fafc] to-[#fff9f2] p-4 sm:p-6 lg:p-8">
+			<div className="max-w-7xl mx-auto space-y-6">
+				<header className="relative overflow-hidden rounded-3xl p-6 sm:p-8 lg:p-10 shadow-xl bg-[linear-gradient(120deg,#005696_0%,#0f73bd_48%,#0092d6_100%)] text-white">
+					<div className="absolute -right-16 -top-12 h-44 w-44 rounded-full bg-white/12" />
+					<div className="absolute right-8 bottom-2 h-20 w-20 rounded-full border border-white/25" />
+					<p className="text-[11px] uppercase tracking-[0.2em] font-black opacity-85">Public Event Leaderboard</p>
+					<h1 className="text-3xl sm:text-4xl lg:text-5xl font-black italic tracking-tight mt-2 uppercase">{payload.event.name}</h1>
+					<p className="text-xs sm:text-sm font-bold mt-4 opacity-90">Event Code: {payload.event.code} • Status: {payload.event.status}</p>
+				</header>
+
+				<section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+					<div className="rounded-2xl border border-[#d9e9f8] bg-white/95 backdrop-blur p-4 shadow-sm">
+						<p className="text-[11px] uppercase tracking-widest font-black text-[#005696]">Champion</p>
+						<p className="mt-2 text-lg font-black text-[#0b2438]">{champion?.displayName ?? "No scores yet"}</p>
+						<p className="text-xs font-bold text-gray-500 mt-1">{champion?.email ?? "No email available"}</p>
+						<p className="mt-3 text-2xl font-black text-[#E31837]">{champion?.totalPoints ?? 0}</p>
+					</div>
+
+					<div className="rounded-2xl border border-[#d9e9f8] bg-white/95 backdrop-blur p-4 shadow-sm">
+						<p className="text-[11px] uppercase tracking-widest font-black text-[#005696]">Visible Locations</p>
+						<p className="mt-3 text-3xl font-black text-[#0b2438]">{visibleLocations}<span className="text-base text-gray-400">/{totalLocations}</span></p>
+						<p className="text-xs font-bold text-gray-500 mt-2">Current location filters applied.</p>
+					</div>
+
+					<div className="rounded-2xl border border-[#d9e9f8] bg-white/95 backdrop-blur p-4 shadow-sm">
+						<p className="text-[11px] uppercase tracking-widest font-black text-[#005696]">Visible Games</p>
+						<p className="mt-3 text-3xl font-black text-[#0b2438]">{visibleGames}<span className="text-base text-gray-400">/{totalGames}</span></p>
+						<p className="text-xs font-bold text-gray-500 mt-2">Current game filters applied.</p>
+					</div>
+
+					<div className="rounded-2xl border border-[#d9e9f8] bg-white/95 backdrop-blur p-4 shadow-sm flex items-center gap-4">
+						<div
+							className="h-16 w-16 rounded-full grid place-items-center border-4 border-white text-[11px] font-black text-[#0b2438]"
+							style={{ background: `conic-gradient(#E31837 ${coveragePercent}%, #d8e4ef ${coveragePercent}% 100%)` }}
+						>
+							<span className="h-11 w-11 rounded-full bg-white grid place-items-center">{coveragePercent}%</span>
+						</div>
+						<div>
+							<p className="text-[11px] uppercase tracking-widest font-black text-[#005696]">Coverage Gauge</p>
+							<p className="mt-1 text-sm font-black text-[#0b2438]">Filter Coverage</p>
+							<p className="text-xs font-bold text-gray-500">How much of location/game sets are visible.</p>
+						</div>
+					</div>
+				</section>
+
+				<section className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+					<article className="bg-white rounded-2xl p-5 border border-gray-100 shadow-sm">
+						<div className="flex items-center justify-between gap-3 mb-4">
+							<h2 className="text-lg font-black text-[#005696] uppercase tracking-widest">Overall Top 3</h2>
+							<span className="text-[11px] font-black uppercase tracking-widest text-gray-400">Event-level podium</span>
+						</div>
+						{renderTopPlayers(payload.overallTop3, "No scores recorded yet for this event.")}
+					</article>
+
+					<article className="bg-white rounded-2xl p-5 border border-gray-100 shadow-sm">
+						<div className="flex items-center justify-between gap-3 mb-4">
+							<h2 className="text-lg font-black text-[#005696] uppercase tracking-widest">Points Snapshot</h2>
+							<span className="text-[11px] font-black uppercase tracking-widest text-gray-400">Bar chart</span>
+						</div>
+						<div className="space-y-3">
+							{payload.overallTop3.length === 0 && (
+								<p className="text-sm font-bold text-gray-400">No chart data yet.</p>
+							)}
+							{payload.overallTop3.map((player) => {
+								const percent = Math.round((player.totalPoints / overallMaxPoints) * 100);
+								return (
+									<div key={`bar-${player.playerId}`}>
+										<div className="flex justify-between items-center mb-1">
+											<p className="text-sm font-black text-[#0b2438] truncate">#{player.rank} {player.displayName}</p>
+											<p className="text-xs font-black text-[#E31837]">{player.totalPoints} pts</p>
+										</div>
+										<div className="h-3 rounded-full bg-[#e6eef5] overflow-hidden">
+											<div
+												className="h-full bg-gradient-to-r from-[#005696] to-[#E31837] transition-all duration-700"
+												style={{ width: `${Math.max(8, percent)}%` }}
+											/>
+										</div>
+									</div>
+								);
+							})}
+						</div>
+					</article>
+				</section>
+
+				<section className="bg-white rounded-2xl p-5 sm:p-6 border border-gray-100 shadow-sm space-y-5">
+					<div className="flex flex-wrap items-center justify-between gap-3">
+						<h2 className="text-lg font-black text-[#005696] uppercase tracking-widest">Explore Filters</h2>
+						<p className="text-xs font-bold text-gray-500">Show only selected items or hide selected items.</p>
+					</div>
+
+					<div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+						<div className="rounded-2xl border border-[#d7e7f4] p-4 bg-[#f8fcff]">
+							<div className="flex items-center justify-between gap-3 mb-3">
+								<h3 className="font-black text-[#005696] text-sm uppercase tracking-widest">Location Filter</h3>
+								<select
+									value={locationFilterMode}
+									onChange={(event) => setLocationFilterMode(event.target.value as "all" | "only" | "hide")}
+									className="text-xs font-black bg-white border border-[#c8dff1] rounded-lg px-2 py-1.5 text-[#005696]"
+								>
+									<option value="all">Show all</option>
+									<option value="only">Show only selected</option>
+									<option value="hide">Hide selected</option>
+								</select>
+							</div>
+							<div className="flex flex-wrap gap-2">
+								{payload.byLocation.map((location) => {
+									const selected = locationSelection.includes(location.locationId);
+									return (
+										<button
+											key={location.locationId}
+											onClick={() => setLocationSelection((prev) => toggleSelection(prev, location.locationId))}
+											className={`px-3 py-1.5 rounded-full text-xs font-black tracking-wide border transition-colors ${selected ? "bg-[#005696] text-white border-[#005696]" : "bg-white text-[#005696] border-[#bfd8ed] hover:border-[#005696]"}`}
+										>
+											{location.locationName}
+										</button>
+									);
+								})}
+							</div>
+						</div>
+
+						<div className="rounded-2xl border border-[#f0dece] p-4 bg-[#fff9f4]">
+							<div className="flex items-center justify-between gap-3 mb-3">
+								<h3 className="font-black text-[#b24d10] text-sm uppercase tracking-widest">Game Filter</h3>
+								<select
+									value={gameFilterMode}
+									onChange={(event) => setGameFilterMode(event.target.value as "all" | "only" | "hide")}
+									className="text-xs font-black bg-white border border-[#f2cdb0] rounded-lg px-2 py-1.5 text-[#b24d10]"
+								>
+									<option value="all">Show all</option>
+									<option value="only">Show only selected</option>
+									<option value="hide">Hide selected</option>
+								</select>
+							</div>
+							<div className="flex flex-wrap gap-2">
+								{payload.byGame.map((game) => {
+									const selected = gameSelection.includes(game.gameId);
+									return (
+										<button
+											key={game.gameId}
+											onClick={() => setGameSelection((prev) => toggleSelection(prev, game.gameId))}
+											className={`px-3 py-1.5 rounded-full text-xs font-black tracking-wide border transition-colors ${selected ? "bg-[#E31837] text-white border-[#E31837]" : "bg-white text-[#b24d10] border-[#f3cdb0] hover:border-[#E31837]"}`}
+										>
+											{game.gameName}
+										</button>
+									);
+								})}
+							</div>
+						</div>
+					</div>
+
+					<div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+						<div className="rounded-xl border border-gray-100 bg-gray-50 p-3">
+							<p className="text-[11px] uppercase tracking-widest font-black text-gray-400">Visible Location Cards</p>
+							<p className="text-2xl font-black text-[#005696] mt-2">{visibleLocations}</p>
+						</div>
+						<div className="rounded-xl border border-gray-100 bg-gray-50 p-3">
+							<p className="text-[11px] uppercase tracking-widest font-black text-gray-400">Visible Game Cards</p>
+							<p className="text-2xl font-black text-[#005696] mt-2">{visibleGames}</p>
+						</div>
+						<div className="rounded-xl border border-gray-100 bg-gray-50 p-3">
+							<p className="text-[11px] uppercase tracking-widest font-black text-gray-400">Visible Points Snapshot</p>
+							<p className="text-2xl font-black text-[#E31837] mt-2">{visiblePoints}</p>
+							<p className="text-[11px] text-gray-500 font-bold mt-1">Across {visibleEntries} leaderboard entries.</p>
+						</div>
+					</div>
+				</section>
+
+				<section className="space-y-3">
+					<h2 className="text-lg font-black text-[#005696] uppercase tracking-widest">Top 3 By Location</h2>
+					{filteredLocations.length === 0 ? (
+						<div className="bg-white rounded-2xl p-5 border border-dashed border-gray-200 text-sm font-bold text-gray-500">
+							No locations match your current filter settings.
+						</div>
+					) : (
+						<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+							{filteredLocations.map((location) => (
+								<article key={location.locationId} className="bg-white rounded-2xl p-5 border border-gray-100 shadow-sm hover:shadow-md transition-shadow">
+									<h3 className="font-black text-[#005696] text-base mb-3">{location.locationName}</h3>
+									{renderTopPlayers(location.leaderboard, "No scores for this location yet.")}
+								</article>
+							))}
+						</div>
+					)}
+				</section>
+
+				<section className="space-y-3 pb-10">
+					<h2 className="text-lg font-black text-[#005696] uppercase tracking-widest">Top 3 By Game</h2>
+					{filteredGames.length === 0 ? (
+						<div className="bg-white rounded-2xl p-5 border border-dashed border-gray-200 text-sm font-bold text-gray-500">
+							No games match your current filter settings.
+						</div>
+					) : (
+						<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+							{filteredGames.map((game) => (
+								<article key={game.gameId} className="bg-white rounded-2xl p-5 border border-gray-100 shadow-sm hover:shadow-md transition-shadow">
+									<h3 className="font-black text-[#005696] text-base mb-3">{game.gameName}</h3>
+									{renderTopPlayers(game.leaderboard, "No scores for this game yet.")}
+								</article>
+							))}
+						</div>
+					)}
+				</section>
+			</div>
+		</div>
+	);
+}
+
+function AdminApp() {
+	const [auth, setAuth] = useState(getAuthState);
+
+	if (!auth.token || !auth.role) {
+		return <LoginScreen onLogin={setAuth} />;
+	}
+
+	return (
+		<AdminShell
+			token={auth.token}
+			role={auth.role}
+			onLogout={() => {
+				localStorage.removeItem(TOKEN_KEY);
+				localStorage.removeItem(ROLE_KEY);
+				setAuth({ token: "", role: "" });
+			}}
+		/>
+	);
 }
 
 function PlayerJoinPage() {
@@ -414,6 +859,8 @@ function PlayerJoinPage() {
 	const [submitting, setSubmitting] = useState(false);
 	const [eventGameId, setEventGameId] = useState<string | null>(null);
 	const [playerId, setPlayerId] = useState<string | null>(null);
+	const [joinSessionToken, setJoinSessionToken] = useState<string | null>(null);
+	const [joinSessionState, setJoinSessionState] = useState<JoinSessionStateResponse | null>(null);
 	const [selfPoints, setSelfPoints] = useState("0");
 	const [selfRoundNumber, setSelfRoundNumber] = useState("1");
 	const [selfScoringBusy, setSelfScoringBusy] = useState(false);
@@ -424,6 +871,30 @@ function PlayerJoinPage() {
 	const roundsEnabled = Boolean(joinMeta?.settings?.roundsEnabled);
 	const configuredTotalRounds = Math.max(1, Number(joinMeta?.settings?.totalRounds ?? 1) || 1);
 	const currentRound = Math.max(1, Math.min(Number(selfRoundNumber) || 1, configuredTotalRounds));
+	const currentRoundMaxPoints = useMemo(() => {
+		const weighted = joinMeta?.settings?.roundMaxPoints;
+		if (Array.isArray(weighted) && weighted.length >= currentRound) {
+			return weighted[currentRound - 1];
+		}
+
+		return joinMeta?.settings?.maxPointsPerRound;
+	}, [joinMeta, currentRound]);
+
+	async function loadJoinSessionState(sessionToken: string, targetJoinToken: string) {
+		const state = await apiRequest<JoinSessionStateResponse>(`/api/join/${targetJoinToken}/session-state`, {
+			headers: { "x-join-session-token": sessionToken }
+		});
+
+		setJoinSessionState(state);
+		if (state.nextRoundNumber) {
+			setSelfRoundNumber(String(state.nextRoundNumber));
+		}
+		setLeaderboardOnlyMode(state.isComplete);
+		if (state.isComplete) {
+			setSelfScoringStatus("All scoring for this game is already completed.");
+		}
+		return state;
+	}
 
 	useEffect(() => {
 		void loadJoinMeta();
@@ -432,9 +903,30 @@ function PlayerJoinPage() {
 		setMetaError(null);
 		setEventGameId(null);
 		setPlayerId(null);
+		setJoinSessionToken(null);
+		setJoinSessionState(null);
 		setLeaderboard([]);
 		setSelfScoringStatus(null);
 		setLeaderboardOnlyMode(false);
+
+		const stored = readStoredJoinSession(joinToken);
+		if (stored) {
+			setDisplayName(stored.displayName);
+			setEmail(stored.email);
+			setEventGameId(stored.eventGameId);
+			setPlayerId(stored.playerId);
+			setJoinSessionToken(stored.joinSessionToken);
+			setStatus(`${stored.displayName}, your registration is still active for this session.`);
+			void loadLeaderboardForGame(stored.eventGameId);
+			void loadJoinSessionState(stored.joinSessionToken, joinToken).catch((caught) => {
+				clearStoredJoinSession(joinToken);
+				setJoinSessionToken(null);
+				setPlayerId(null);
+				setJoinSessionState(null);
+				setStatus(null);
+				setError(caught instanceof Error ? caught.message : "Unable to restore your game session");
+			});
+		}
 	}, [joinToken]);
 
 	async function loadJoinMeta() {
@@ -471,13 +963,18 @@ function PlayerJoinPage() {
 			return;
 		}
 
+		if (!isPetsmartEmail(email)) {
+			setError("Please use a valid @petsmart.com email");
+			return;
+		}
+
 		setSubmitting(true);
 		setStatus(null);
 		setError(null);
 		try {
 			const payload = {
 				displayName: displayName.trim(),
-				email: email.trim() || undefined,
+				email: email.trim().toLowerCase(),
 			};
 			const result = await apiRequest<JoinResponse>(`/api/join/${joinToken}`, {
 				method: "POST",
@@ -485,8 +982,17 @@ function PlayerJoinPage() {
 			});
 			setEventGameId(result.eventGameId);
 			setPlayerId(result.playerId);
+			setJoinSessionToken(result.joinSessionToken);
+			saveStoredJoinSession(joinToken, {
+				playerId: result.playerId,
+				eventGameId: result.eventGameId,
+				displayName: displayName.trim(),
+				email: email.trim().toLowerCase(),
+				joinSessionToken: result.joinSessionToken
+			});
 			setStatus(`${result.displayName}, you are successfully registered for this game.`);
 			await loadLeaderboardForGame(result.eventGameId);
+			await loadJoinSessionState(result.joinSessionToken, joinToken);
 		} catch (caught) {
 			setError(caught instanceof Error ? caught.message : "Unable to register for this game");
 		} finally {
@@ -501,9 +1007,19 @@ function PlayerJoinPage() {
 			return;
 		}
 
+		if (!joinSessionToken) {
+			setError("Session expired. Please re-register from this join link.");
+			return;
+		}
+
 		const points = Number(selfPoints);
 		if (!Number.isFinite(points)) {
 			setError("Enter a valid maximum points value");
+			return;
+		}
+
+		if (typeof currentRoundMaxPoints === "number" && points > currentRoundMaxPoints) {
+			setError(`Points for this round cannot exceed ${currentRoundMaxPoints}`);
 			return;
 		}
 
@@ -523,8 +1039,8 @@ function PlayerJoinPage() {
 		try {
 			await apiRequest<ScoreEntryRecord>(`/api/join/${joinToken}/scores`, {
 				method: "POST",
+				headers: { "x-join-session-token": joinSessionToken },
 				body: JSON.stringify({
-					playerId,
 					points,
 					roundNumber: roundsEnabled ? currentRound : undefined
 				})
@@ -533,7 +1049,6 @@ function PlayerJoinPage() {
 			if (roundsEnabled) {
 				if (currentRound < configuredTotalRounds) {
 					setSelfScoringStatus(`Round ${currentRound} submitted. Continue to round ${currentRound + 1}.`);
-					setSelfRoundNumber(String(currentRound + 1));
 					setSelfPoints("0");
 				} else {
 					setSelfScoringStatus(`Round ${currentRound} submitted. All rounds completed.`);
@@ -546,7 +1061,15 @@ function PlayerJoinPage() {
 			if (eventGameId) {
 				await loadLeaderboardForGame(eventGameId);
 			}
+			await loadJoinSessionState(joinSessionToken, joinToken);
 		} catch (caught) {
+			if (caught instanceof ApiError && (caught.status === 401 || caught.status === 403)) {
+				clearStoredJoinSession(joinToken);
+				setJoinSessionToken(null);
+				setPlayerId(null);
+				setJoinSessionState(null);
+				setStatus(null);
+			}
 			setError(caught instanceof Error ? caught.message : "Unable to submit score");
 		} finally {
 			setSelfScoringBusy(false);
@@ -555,6 +1078,7 @@ function PlayerJoinPage() {
 
 	const canSelfScore = (joinMeta?.scoringAuthority ?? "ADMIN_ONLY") !== "ADMIN_ONLY";
 	const isRegistered = Boolean(playerId);
+	const canSubmitMoreScores = !joinSessionState?.isComplete;
 
 	return (
 		<div className="min-h-screen bg-[#F4F7F9] p-3 sm:p-4 md:p-6">
@@ -592,13 +1116,14 @@ function PlayerJoinPage() {
 								/>
 							</div>
 							<div>
-								<label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Email (optional)</label>
+								<label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Petsmart Email</label>
 								<input
 									type="email"
 									value={email}
 									onChange={(event) => setEmail(event.target.value)}
+									required
 									className="w-full p-4 bg-gray-50 border-2 border-gray-200 rounded-xl focus:border-[#E31837] outline-none font-bold"
-									placeholder="you@example.com"
+									placeholder="you@petsmart.com"
 								/>
 							</div>
 							{error && <p className="text-[#E31837] bg-red-50 border border-red-100 rounded-xl p-3 text-sm font-bold">{error}</p>}
@@ -621,18 +1146,28 @@ function PlayerJoinPage() {
 						<div className="mt-5 rounded-xl border border-gray-100 p-4 bg-gray-50 space-y-3">
 							<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Score Submission</p>
 							{canSelfScore ? (
+								canSubmitMoreScores ? (
 								<form onSubmit={(event) => { void submitSelfScore(event); }} className="space-y-3">
 									{roundsEnabled && (
-										<p className="text-xs font-black text-[#005696] bg-blue-50 border border-blue-100 rounded-xl px-3 py-2">
-											Round {currentRound} of {configuredTotalRounds}
-										</p>
+										<div className="text-xs font-black text-[#005696] bg-blue-50 border border-blue-100 rounded-xl px-3 py-2 space-y-1">
+											<p>Round {currentRound} of {configuredTotalRounds}</p>
+											{typeof currentRoundMaxPoints === "number" && (
+												<p>Maximum allowed points for this round is: {currentRoundMaxPoints}</p>
+											)}
+										</div>
 									)}
 									<div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
 										<input
 											type="number"
 											value={selfPoints}
 											onChange={(event) => setSelfPoints(event.target.value)}
-											placeholder={roundsEnabled ? `Maximum points for round ${currentRound}` : "Maximum points"}
+											placeholder={
+												typeof currentRoundMaxPoints === "number"
+													? `Max points for round ${currentRound}: ${currentRoundMaxPoints}`
+													: roundsEnabled
+														? `Maximum points for round ${currentRound}`
+														: "Maximum points"
+											}
 											className="w-full p-3 bg-white border border-gray-200 rounded-xl outline-none focus:border-[#005696] font-bold"
 										/>
 										{roundsEnabled ? (
@@ -650,6 +1185,9 @@ function PlayerJoinPage() {
 									</button>
 									{selfScoringStatus && <p className="text-xs font-bold text-green-700">{selfScoringStatus}</p>}
 								</form>
+								) : (
+									<p className="text-xs font-bold text-gray-500">You have already completed scoring for this game.</p>
+								)
 							) : (
 								<p className="text-xs font-bold text-gray-500">This event is configured for admin-only scoring.</p>
 							)}
@@ -724,7 +1262,7 @@ function GameAdminPage() {
 	}, [data, search]);
 
 	if (!token && !adminToken) {
-		return <LoginScreen onLogin={setToken} />;
+		return <LoginScreen onLogin={(auth) => setToken(auth.token)} />;
 	}
 
 	async function loadPageData() {
@@ -903,12 +1441,12 @@ function GameAdminPage() {
 	);
 }
 
-function AdminShell({ token, onLogout }: { token: string; onLogout: () => void }) {
+function AdminShell({ token, role, onLogout }: { token: string; role: AppRole; onLogout: () => void }) {
 	const [events, setEvents] = useState<EventRecord[]>([]);
 	const [games, setGames] = useState<GameRecord[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [globalError, setGlobalError] = useState<string | null>(null);
-	const [activeTab, setActiveTab] = useState<"dashboard" | "events" | "leaderboards">("dashboard");
+	const [activeTab, setActiveTab] = useState<"dashboard" | "events" | "leaderboards" | "users">("dashboard");
 	const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
 	const [showWizard, setShowWizard] = useState(false);
 	const [showStressModal, setShowStressModal] = useState(false);
@@ -939,6 +1477,11 @@ function AdminShell({ token, onLogout }: { token: string; onLogout: () => void }
 		);
 	}
 
+	const visibleTabs: Array<"dashboard" | "events" | "leaderboards" | "users"> =
+		role === "SUPER_ADMIN"
+			? ["dashboard", "events", "leaderboards", "users"]
+			: ["dashboard", "events", "leaderboards"];
+
 	return (
 		<div className="min-h-screen bg-[#F4F7F9] text-slate-900 pb-20 lg:pb-0" style={{ fontFamily: "'Inter', sans-serif" }}>
 			<aside className="fixed left-0 top-0 h-screen w-64 bg-white border-r border-gray-200 flex-col z-40 hidden lg:flex">
@@ -947,7 +1490,7 @@ function AdminShell({ token, onLogout }: { token: string; onLogout: () => void }
 					<div className="text-[#005696] text-[10px] font-bold uppercase tracking-widest leading-none">Wag More Bark Less</div>
 				</div>
 				<nav className="flex-1 px-4 space-y-2 mt-4">
-					{(["dashboard", "events", "leaderboards"] as const).map((tab) => (
+					{visibleTabs.map((tab) => (
 						<button
 							key={tab}
 							onClick={() => { setActiveTab(tab); setSelectedEventId(null); }}
@@ -956,6 +1499,7 @@ function AdminShell({ token, onLogout }: { token: string; onLogout: () => void }
 							{tab === "dashboard" && <><LayoutDashboard size={20} /> Dashboard</>}
 							{tab === "events" && <><Gamepad2 size={20} /> Event Manager</>}
 							{tab === "leaderboards" && <><Trophy size={20} /> Leaderboards</>}
+							{tab === "users" && <><Users size={20} /> User Admin</>}
 						</button>
 					))}
 				</nav>
@@ -1001,6 +1545,7 @@ function AdminShell({ token, onLogout }: { token: string; onLogout: () => void }
 							: <EventListView events={events} onSelect={setSelectedEventId} onLaunchWizard={() => setShowWizard(true)} />
 					)}
 					{activeTab === "leaderboards" && <LeaderboardsView token={token} events={events} />}
+									{activeTab === "users" && role === "SUPER_ADMIN" && <UserAdminView token={token} />}
 				</div>
 			</main>
 
@@ -1146,6 +1691,249 @@ function StressScenarioModal({
 					)}
 				</div>
 			</div>
+		</div>
+	);
+}
+
+function UserAdminView({ token }: { token: string }) {
+	const [adminUsers, setAdminUsers] = useState<AdminUserRecord[]>([]);
+	const [loadingAdmins, setLoadingAdmins] = useState(true);
+	const [selectedAdminUserId, setSelectedAdminUserId] = useState("");
+	const [editAdminEmail, setEditAdminEmail] = useState("");
+	const [editAdminPassword, setEditAdminPassword] = useState("");
+	const [newAdminEmail, setNewAdminEmail] = useState("");
+	const [newAdminPassword, setNewAdminPassword] = useState("ChangeMe");
+	const [currentPassword, setCurrentPassword] = useState("");
+	const [newPassword, setNewPassword] = useState("");
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const [status, setStatus] = useState<string | null>(null);
+
+	useEffect(() => {
+		void loadAdminUsers();
+	}, [token]);
+
+	useEffect(() => {
+		const selected = adminUsers.find((user) => user.userId === selectedAdminUserId) ?? adminUsers[0];
+		if (!selected) {
+			setSelectedAdminUserId("");
+			setEditAdminEmail("");
+			setEditAdminPassword("");
+			return;
+		}
+
+		if (!selectedAdminUserId || !adminUsers.some((user) => user.userId === selectedAdminUserId)) {
+			setSelectedAdminUserId(selected.userId);
+		}
+
+		setEditAdminEmail(selected.email);
+		setEditAdminPassword("");
+	}, [adminUsers, selectedAdminUserId]);
+
+	async function loadAdminUsers() {
+		setLoadingAdmins(true);
+		try {
+			const users = await authed<AdminUserRecord[]>("/api/admin/users", token);
+			setAdminUsers(users);
+		} catch (caught) {
+			setError(caught instanceof Error ? caught.message : "Unable to load admin users");
+		} finally {
+			setLoadingAdmins(false);
+		}
+	}
+
+	async function createAdminUser(event: FormEvent) {
+		event.preventDefault();
+		setBusy(true);
+		setError(null);
+		setStatus(null);
+		try {
+			const created = await authed<CreateAdminUserResponse>("/api/admin/users", token, {
+				method: "POST",
+				body: JSON.stringify({
+					email: newAdminEmail.trim().toLowerCase(),
+					password: newAdminPassword
+				})
+			});
+
+			setStatus(`Admin created: ${created.email}`);
+			setNewAdminEmail("");
+			setNewAdminPassword("ChangeMe");
+			await loadAdminUsers();
+		} catch (caught) {
+			setError(caught instanceof Error ? caught.message : "Unable to create admin user");
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	async function updateAdminUser(event: FormEvent) {
+		event.preventDefault();
+		if (!selectedAdminUserId) {
+			setError("Select an admin user first");
+			return;
+		}
+
+		setBusy(true);
+		setError(null);
+		setStatus(null);
+		try {
+			const payload: { email?: string; password?: string } = {};
+			if (editAdminEmail.trim()) {
+				payload.email = editAdminEmail.trim().toLowerCase();
+			}
+			if (editAdminPassword.trim()) {
+				payload.password = editAdminPassword;
+			}
+
+			const updated = await authed<AdminUserRecord>(`/api/admin/users/${selectedAdminUserId}`, token, {
+				method: "PATCH",
+				body: JSON.stringify(payload)
+			});
+
+			setStatus(`Admin updated: ${updated.email}`);
+			setEditAdminPassword("");
+			await loadAdminUsers();
+		} catch (caught) {
+			setError(caught instanceof Error ? caught.message : "Unable to update admin user");
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	async function changeSuperAdminPassword(event: FormEvent) {
+		event.preventDefault();
+		setBusy(true);
+		setError(null);
+		setStatus(null);
+		try {
+			await authed<{ message: string }>("/api/auth/change-password", token, {
+				method: "POST",
+				body: JSON.stringify({
+					currentPassword,
+					newPassword
+				})
+			});
+
+			setStatus("Super admin password updated successfully.");
+			setCurrentPassword("");
+			setNewPassword("");
+		} catch (caught) {
+			setError(caught instanceof Error ? caught.message : "Unable to update password");
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	return (
+		<div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+			<section className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 space-y-3">
+				<h2 className="text-lg font-black text-[#005696] uppercase tracking-tight">Create Admin User</h2>
+				<p className="text-sm text-gray-500">Only the designated super admin can create admin users.</p>
+				<form onSubmit={(event) => { void createAdminUser(event); }} className="space-y-3">
+					<input
+						type="email"
+						required
+						value={newAdminEmail}
+						onChange={(event) => setNewAdminEmail(event.target.value)}
+						placeholder="admin@petsmart.com"
+						className="w-full bg-gray-50 border border-gray-200 p-3 rounded-xl text-sm font-bold outline-none focus:border-[#E31837]"
+					/>
+					<input
+						type="password"
+						required
+						value={newAdminPassword}
+						onChange={(event) => setNewAdminPassword(event.target.value)}
+						placeholder="Initial password"
+						className="w-full bg-gray-50 border border-gray-200 p-3 rounded-xl text-sm font-bold outline-none focus:border-[#E31837]"
+					/>
+					<button
+						type="submit"
+						disabled={busy}
+						className="w-full py-3 bg-[#E31837] text-white rounded-xl text-xs font-black uppercase tracking-widest hover:bg-[#c1142f] disabled:opacity-60"
+					>
+						Create Admin
+					</button>
+				</form>
+			</section>
+
+			<section className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 space-y-3">
+				<h2 className="text-lg font-black text-[#005696] uppercase tracking-tight">Edit Existing Admin</h2>
+				<p className="text-sm text-gray-500">Update the email or reset the password for an existing admin user.</p>
+				{loadingAdmins ? (
+					<p className="text-sm font-bold text-gray-400">Loading admin users...</p>
+				) : adminUsers.length === 0 ? (
+					<p className="text-sm font-bold text-gray-400">No admin users found yet.</p>
+				) : (
+					<form onSubmit={(event) => { void updateAdminUser(event); }} className="space-y-3">
+						<select
+							value={selectedAdminUserId}
+							onChange={(event) => setSelectedAdminUserId(event.target.value)}
+							className="w-full bg-gray-50 border border-gray-200 p-3 rounded-xl text-sm font-bold outline-none focus:border-[#005696]"
+						>
+							{adminUsers.map((user) => (
+								<option key={user.userId} value={user.userId}>{user.email}</option>
+							))}
+						</select>
+						<input
+							type="email"
+							required
+							value={editAdminEmail}
+							onChange={(event) => setEditAdminEmail(event.target.value)}
+							placeholder="admin@petsmart.com"
+							className="w-full bg-gray-50 border border-gray-200 p-3 rounded-xl text-sm font-bold outline-none focus:border-[#005696]"
+						/>
+						<input
+							type="password"
+							value={editAdminPassword}
+							onChange={(event) => setEditAdminPassword(event.target.value)}
+							placeholder="New password (leave blank to keep unchanged)"
+							className="w-full bg-gray-50 border border-gray-200 p-3 rounded-xl text-sm font-bold outline-none focus:border-[#005696]"
+						/>
+						<button
+							type="submit"
+							disabled={busy}
+							className="w-full py-3 bg-[#005696] text-white rounded-xl text-xs font-black uppercase tracking-widest hover:bg-[#004477] disabled:opacity-60"
+						>
+							Save Admin Changes
+						</button>
+					</form>
+				)}
+			</section>
+
+			<section className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 space-y-3">
+				<h2 className="text-lg font-black text-[#005696] uppercase tracking-tight">Change My Password</h2>
+				<p className="text-sm text-gray-500">Update the super admin password after first login.</p>
+				<form onSubmit={(event) => { void changeSuperAdminPassword(event); }} className="space-y-3">
+					<input
+						type="password"
+						required
+						value={currentPassword}
+						onChange={(event) => setCurrentPassword(event.target.value)}
+						placeholder="Current password"
+						className="w-full bg-gray-50 border border-gray-200 p-3 rounded-xl text-sm font-bold outline-none focus:border-[#005696]"
+					/>
+					<input
+						type="password"
+						required
+						minLength={8}
+						value={newPassword}
+						onChange={(event) => setNewPassword(event.target.value)}
+						placeholder="New password"
+						className="w-full bg-gray-50 border border-gray-200 p-3 rounded-xl text-sm font-bold outline-none focus:border-[#005696]"
+					/>
+					<button
+						type="submit"
+						disabled={busy}
+						className="w-full py-3 bg-[#005696] text-white rounded-xl text-xs font-black uppercase tracking-widest hover:bg-[#004477] disabled:opacity-60"
+					>
+						Change Password
+					</button>
+				</form>
+			</section>
+
+			{error && <p className="lg:col-span-2 text-[#E31837] bg-red-50 border border-red-100 rounded-xl p-3 text-sm font-bold">{error}</p>}
+			{status && <p className="lg:col-span-2 text-green-700 bg-green-50 border border-green-100 rounded-xl p-3 text-sm font-bold">{status}</p>}
 		</div>
 	);
 }
@@ -1324,11 +2112,12 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 	const [editGameScoringMode, setEditGameScoringMode] = useState<"INDIVIDUAL" | "CUMULATIVE">("INDIVIDUAL");
 	const [deployLocationId, setDeployLocationId] = useState("");
 	const [selectedDeployGameIds, setSelectedDeployGameIds] = useState<string[]>([]);
+	const [publicLinkStatus, setPublicLinkStatus] = useState<string | null>(null);
 	const [deployGameSettingsById, setDeployGameSettingsById] = useState<Record<string, {
 		scoringAuthority: "ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID";
 		roundsEnabled: boolean;
 		totalRounds: string;
-		maxPointsPerRound: string;
+		roundMaxPointsCsv: string;
 	}>>({});
 	const gameNameById = useMemo(() => new Map(localGames.map((game) => [game._id, game.name])), [localGames]);
 	const mappedGameOptions = useMemo(() => {
@@ -1383,6 +2172,8 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 		});
 	}, [joinLinks]);
 
+	const publicLeaderboardUrl = useMemo(() => `${browserOrigin()}/leaderboard/event/${eventId}`, [eventId]);
+
 	useEffect(() => {
 		setLocalGames(games);
 	}, [games]);
@@ -1397,6 +2188,10 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 			setManageGameMode("create");
 		}
 	}, [quickSetupOpen]);
+
+	useEffect(() => {
+		setPublicLinkStatus(null);
+	}, [eventId]);
 
 	useEffect(() => { void loadContext(); }, [eventId]);
 	useEffect(() => { void applyFilters(); }, [leaderboard, eventGames, detailLocFilter, detailGameFilter]);
@@ -1692,22 +2487,28 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 			}
 
 			const created = await Promise.all(
-				pendingGameIds.map((gameId) =>
-					authed<EventGameRecord>("/api/event-games", token, {
+				pendingGameIds.map((gameId) => {
+					const settings = deployGameSettingsById[gameId];
+					const roundMaxPoints = parseRoundMaxPointsCsv(settings?.roundMaxPointsCsv ?? "");
+					const configuredTotalRounds = settings?.roundsEnabled
+						? Math.max(Number(settings.totalRounds || 0) || 0, roundMaxPoints.length)
+						: undefined;
+
+					return authed<EventGameRecord>("/api/event-games", token, {
 						method: "POST",
 						body: JSON.stringify({
 							eventId,
 							locationId: deployLocationId,
 							gameId,
 							settings: {
-								scoringAuthority: deployGameSettingsById[gameId]?.scoringAuthority ?? "ADMIN_ONLY",
-								roundsEnabled: deployGameSettingsById[gameId]?.roundsEnabled ?? false,
-								totalRounds: deployGameSettingsById[gameId]?.roundsEnabled ? Number(deployGameSettingsById[gameId]?.totalRounds || 0) || undefined : undefined,
-								maxPointsPerRound: Number(deployGameSettingsById[gameId]?.maxPointsPerRound || 0) || undefined
+								scoringAuthority: settings?.scoringAuthority ?? "ADMIN_ONLY",
+								roundsEnabled: settings?.roundsEnabled ?? false,
+								totalRounds: configuredTotalRounds || undefined,
+								roundMaxPoints: roundMaxPoints.length > 0 ? roundMaxPoints : undefined
 							}
 						})
-					})
-				)
+					});
+				})
 			);
 
 			setEventGames((prev) => [...created, ...prev]);
@@ -1811,6 +2612,11 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 		}
 	}
 
+	async function copyPublicLeaderboardLink() {
+		await navigator.clipboard.writeText(publicLeaderboardUrl).catch(() => undefined);
+		setPublicLinkStatus("Public leaderboard link copied.");
+	}
+
 	if (!selectedEvent) return null;
 	const topScore = filteredLeaders[0]?.totalPoints ?? 0;
 
@@ -1820,7 +2626,21 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 				<button onClick={onBack} className="flex items-center gap-2 text-gray-500 font-bold hover:text-[#E31837] transition-colors">
 					<ArrowLeft size={20} /> Back to Event List
 				</button>
-				<div className="flex items-center gap-2">
+				<div className="flex items-center gap-2 flex-wrap justify-end">
+					<a
+						href={publicLeaderboardUrl}
+						target="_blank"
+						rel="noreferrer"
+						className="px-4 py-2 bg-[#E31837] text-white rounded-xl text-xs font-bold hover:bg-[#c1142f]"
+					>
+						Open Public Leaderboard
+					</a>
+					<button
+						onClick={() => { void copyPublicLeaderboardLink(); }}
+						className="px-4 py-2 bg-white border border-gray-200 rounded-xl text-xs font-bold text-gray-500 hover:bg-gray-50"
+					>
+						Copy Public Link
+					</button>
 					<button
 						onClick={() => setLinkWizardOpen(true)}
 						className="px-4 py-2 bg-[#005696] text-white rounded-xl text-xs font-bold hover:bg-[#004477]"
@@ -1842,6 +2662,7 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 					</button>
 				</div>
 			</div>
+			{publicLinkStatus && <p className="text-xs font-bold text-green-700">{publicLinkStatus}</p>}
 
 			<div className="bg-[#005696] p-8 rounded-3xl text-white shadow-xl">
 				<div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
@@ -2121,7 +2942,7 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 																			scoringAuthority: "ADMIN_ONLY",
 																			roundsEnabled: false,
 																			totalRounds: "3",
-																			maxPointsPerRound: "10"
+																			roundMaxPointsCsv: "10,10,10"
 																		}
 																	}));
 																} else {
@@ -2145,7 +2966,7 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 															scoringAuthority: "ADMIN_ONLY" as const,
 															roundsEnabled: false,
 															totalRounds: "3",
-															maxPointsPerRound: "10"
+															roundMaxPointsCsv: "10,10,10"
 														};
 														return (
 															<div key={gameId} className="border border-gray-100 rounded-xl p-2.5 space-y-2 bg-gray-50">
@@ -2160,7 +2981,7 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 																	Enable rounds
 																</label>
 																<input type="number" min={1} value={settings.totalRounds} onChange={(event) => setDeployGameSettingsById((prev) => ({ ...prev, [gameId]: { ...settings, totalRounds: event.target.value } }))} disabled={!settings.roundsEnabled} placeholder="Total rounds" className="w-full bg-white border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837] disabled:opacity-50" />
-																<input type="number" min={1} value={settings.maxPointsPerRound} onChange={(event) => setDeployGameSettingsById((prev) => ({ ...prev, [gameId]: { ...settings, maxPointsPerRound: event.target.value } }))} placeholder="Maximum points per round" className="w-full bg-white border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+																<input type="text" value={settings.roundMaxPointsCsv} onChange={(event) => setDeployGameSettingsById((prev) => ({ ...prev, [gameId]: { ...settings, roundMaxPointsCsv: event.target.value } }))} placeholder="Round max points (comma separated)" className="w-full bg-white border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
 															</div>
 														);
 													})}
@@ -2250,6 +3071,8 @@ function EventLinkWizardModal({
 		? locationNameById.get(selectedEventGame.locationId) ?? "Location"
 		: "Location";
 
+	const canGenerateAdminQr = (selectedEventGame?.settings?.scoringAuthority ?? "ADMIN_ONLY") !== "PLAYER_SELF";
+
 	const effectiveLink = useMemo(() => {
 		if (!selectedEventGame) return null;
 		if (joinLink) return joinLink;
@@ -2259,19 +3082,27 @@ function EventLinkWizardModal({
 	const activeUrl = useMemo(() => {
 		if (!effectiveLink || !selectedEventGame) return "";
 		if (audience === "admin") {
-			return effectiveLink.adminUrl ?? `${browserOrigin()}/game-admin/${selectedEventGame._id}`;
+			if (!canGenerateAdminQr) return "";
+			return effectiveLink.adminUrl ?? "";
 		}
 		return effectiveLink.playerUrl ?? effectiveLink.joinUrl;
-	}, [effectiveLink, audience, selectedEventGame]);
+	}, [effectiveLink, audience, selectedEventGame, canGenerateAdminQr]);
 
 	const activeQrDataUrl = useMemo(() => {
 		if (!effectiveLink) return undefined;
+		if (audience === "admin" && !canGenerateAdminQr) return undefined;
 		return audience === "admin"
 			? effectiveLink.adminQrCodeDataUrl
 			: effectiveLink.playerQrCodeDataUrl ?? effectiveLink.qrCodeDataUrl;
-	}, [effectiveLink, audience]);
+	}, [effectiveLink, audience, canGenerateAdminQr]);
 
 	const linkLabel = `${selectedGameLabel} ${audience === "player" ? "Player" : "Game Admin"}`;
+
+	useEffect(() => {
+		if (!canGenerateAdminQr && audience === "admin") {
+			setAudience("player");
+		}
+	}, [canGenerateAdminQr, audience]);
 
 	useEffect(() => {
 		if (initialSelectionAppliedRef.current) {
@@ -2354,10 +3185,16 @@ function EventLinkWizardModal({
 
 	async function printLinkQr() {
 		if (!activeUrl) return;
+		const popup = openPrintPopup();
+		if (!popup) return;
 		setActionBusy(true);
 		try {
 			const dataUrl = await ensureQrDataUrl(activeQrDataUrl, activeUrl);
-			printQrCards([{ label: linkLabel, dataUrl, url: activeUrl }]);
+			printQrCards([{ label: linkLabel, dataUrl, url: activeUrl }], popup);
+		} catch {
+			if (!popup.closed) {
+				popup.document.body.innerHTML = "<p>Unable to prepare QR code for printing.</p>";
+			}
 		} finally {
 			setActionBusy(false);
 		}
@@ -2433,20 +3270,25 @@ function EventLinkWizardModal({
 								<p className="text-sm font-black text-gray-500 uppercase tracking-widest">Choose Audience</p>
 								<p className="text-xs text-gray-500 mt-1">{selectedLocationLabel} • <span className="font-black text-[#005696]">{selectedGameLabel}</span></p>
 							</div>
-							<div className="grid grid-cols-2 gap-2">
+							<div className={`grid ${canGenerateAdminQr ? "grid-cols-2" : "grid-cols-1"} gap-2`}>
 								<button
 									onClick={() => setAudience("player")}
 									className={`py-2.5 rounded-xl border text-xs font-black uppercase tracking-widest ${audience === "player" ? "bg-[#E31837] border-[#E31837] text-white" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}
 								>
 									Player
 								</button>
-								<button
-									onClick={() => setAudience("admin")}
-									className={`py-2.5 rounded-xl border text-xs font-black uppercase tracking-widest ${audience === "admin" ? "bg-[#005696] border-[#005696] text-white" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}
-								>
-									Game Admin
-								</button>
+								{canGenerateAdminQr && (
+									<button
+										onClick={() => setAudience("admin")}
+										className={`py-2.5 rounded-xl border text-xs font-black uppercase tracking-widest ${audience === "admin" ? "bg-[#005696] border-[#005696] text-white" : "border-gray-200 text-gray-600 hover:bg-gray-50"}`}
+									>
+										Game Admin
+									</button>
+								)}
 							</div>
+							{!canGenerateAdminQr && (
+								<p className="text-[11px] font-bold text-gray-500">Game Admin QR is disabled because this game is configured for player self-scoring only.</p>
+							)}
 
 							<div className="border border-gray-100 rounded-xl p-3 flex flex-col items-center gap-3">
 								<QRDisplay dataUrl={activeQrDataUrl} value={activeUrl} size={220} />
@@ -2629,7 +3471,7 @@ function WizardModal({ token, events, games, onClose, onComplete }: {
 	const [wizardRoundsEnabled, setWizardRoundsEnabled] = useState(false);
 	const [wizardScoringAuthority, setWizardScoringAuthority] = useState<"ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID">("ADMIN_ONLY");
 	const [wizardTotalRounds, setWizardTotalRounds] = useState("3");
-	const [wizardMaxPointsPerRound, setWizardMaxPointsPerRound] = useState("10");
+	const [wizardRoundMaxPointsCsv, setWizardRoundMaxPointsCsv] = useState("10,10,10");
 
 	async function loadLocations(eventId: string) {
 		const locs = await authed<LocationRecord[]>(`/api/events/${eventId}/locations`, token);
@@ -2696,6 +3538,11 @@ function WizardModal({ token, events, games, onClose, onComplete }: {
 		setSelectedGame(gm);
 		setBusy(true); setError(null);
 		try {
+			const roundMaxPoints = parseRoundMaxPointsCsv(wizardRoundMaxPointsCsv);
+			const totalRounds = wizardRoundsEnabled
+				? Math.max(Number(wizardTotalRounds) || 0, roundMaxPoints.length)
+				: undefined;
+
 			const eg = await authed<EventGameRecord>("/api/event-games", token, {
 				method: "POST",
 				body: JSON.stringify({
@@ -2705,8 +3552,8 @@ function WizardModal({ token, events, games, onClose, onComplete }: {
 					settings: {
 						scoringAuthority: wizardScoringAuthority,
 						roundsEnabled: wizardRoundsEnabled,
-						totalRounds: wizardRoundsEnabled ? Number(wizardTotalRounds) : undefined,
-						maxPointsPerRound: Number(wizardMaxPointsPerRound) || undefined
+						totalRounds: totalRounds || undefined,
+						roundMaxPoints: roundMaxPoints.length > 0 ? roundMaxPoints : undefined
 					}
 				})
 			});
@@ -2830,7 +3677,7 @@ function WizardModal({ token, events, games, onClose, onComplete }: {
 									Enable rounds
 								</label>
 								<input type="number" min={1} value={wizardTotalRounds} onChange={(e) => setWizardTotalRounds(e.target.value)} disabled={!wizardRoundsEnabled} placeholder="Total rounds" className="w-full p-2.5 bg-white border border-gray-200 rounded-xl text-xs font-bold outline-none focus:border-[#E31837] disabled:opacity-50" />
-											<input type="number" min={1} value={wizardMaxPointsPerRound} onChange={(e) => setWizardMaxPointsPerRound(e.target.value)} placeholder="Maximum points per round" className="w-full p-2.5 bg-white border border-gray-200 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+								<input type="text" value={wizardRoundMaxPointsCsv} onChange={(e) => setWizardRoundMaxPointsCsv(e.target.value)} disabled={!wizardRoundsEnabled} placeholder="Round max points (e.g. 10,15,20)" className="w-full p-2.5 bg-white border border-gray-200 rounded-xl text-xs font-bold outline-none focus:border-[#E31837] disabled:opacity-50" />
 							</div>
 							<div className="grid gap-3 max-h-64 overflow-y-auto">
 								<button onClick={() => setCreatingGame(true)} className="w-full p-4 border-2 border-dashed border-gray-300 rounded-xl text-gray-500 font-bold hover:border-[#E31837] hover:text-[#E31837] transition-all flex items-center justify-center gap-2">

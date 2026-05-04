@@ -7,6 +7,7 @@ declare module "express-serve-static-core" {
     auth?: {
       userId: string;
       role: AppRole;
+      email: string;
       playerId?: string;
     };
   }
@@ -37,7 +38,7 @@ export function requireRole(roles: AppRole[]) {
       return;
     }
 
-    if (!roles.includes(req.auth.role)) {
+    if (!roles.includes(req.auth.role) && !(req.auth.role === "SUPER_ADMIN" && roles.includes("ADMIN"))) {
       next(new Error("FORBIDDEN"));
       return;
     }
