@@ -982,7 +982,23 @@ app.post(
   requireRole(["ADMIN"]),
   asyncHandler(async (req, res) => {
     const payload = parseOrThrow(createGameSchema, req.body);
-    const created = await GameModel.create(payload);
+    let created;
+    try {
+      created = await GameModel.create(payload);
+    } catch (error: unknown) {
+      const isDuplicateKey =
+        typeof error === "object"
+        && error !== null
+        && "code" in error
+        && (error as { code?: number }).code === 11000;
+
+      if (isDuplicateKey) {
+        throw new AppError(409, "A game with this key already exists. Use a different name or select an existing game.");
+      }
+
+      throw error;
+    }
+
     res.status(201).json(created);
   })
 );

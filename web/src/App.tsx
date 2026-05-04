@@ -1542,7 +1542,7 @@ function AdminShell({ token, role, onLogout }: { token: string; role: AppRole; o
 					{activeTab === "events" && (
 						selectedEventId
 							? <EventDetailView token={token} eventId={selectedEventId} events={events} games={games} onBack={() => setSelectedEventId(null)} onReload={loadWorkspace} />
-							: <EventListView events={events} onSelect={setSelectedEventId} onLaunchWizard={() => setShowWizard(true)} />
+							: <EventListView token={token} events={events} onSelect={setSelectedEventId} onLaunchWizard={() => setShowWizard(true)} onCreated={() => { void loadWorkspace(); }} />
 					)}
 					{activeTab === "leaderboards" && <LeaderboardsView token={token} events={events} />}
 									{activeTab === "users" && role === "SUPER_ADMIN" && <UserAdminView token={token} />}
@@ -2049,7 +2049,43 @@ function DashboardView({ token, events, games }: { token: string; events: EventR
 }
 
 // ─── Event List ───────────────────────────────────────────────────────────────
-function EventListView({ events, onSelect, onLaunchWizard }: { events: EventRecord[]; onSelect: (id: string) => void; onLaunchWizard: () => void }) {
+function EventListView({ token, events, onSelect, onLaunchWizard, onCreated }: {
+	token: string; events: EventRecord[]; onSelect: (id: string) => void;
+	onLaunchWizard: () => void; onCreated: () => void;
+}) {
+	const [showCreateForm, setShowCreateForm] = useState(false);
+	const [createName, setCreateName] = useState("");
+	const [createDescription, setCreateDescription] = useState("");
+	const [createDate, setCreateDate] = useState("");
+	const [createStatus, setCreateStatus] = useState<"DRAFT" | "LIVE" | "CLOSED">("DRAFT");
+	const [createBusy, setCreateBusy] = useState(false);
+	const [createError, setCreateError] = useState<string | null>(null);
+
+	async function submitCreate(e: FormEvent) {
+		e.preventDefault();
+		if (!createName.trim()) { setCreateError("Event name is required"); return; }
+		setCreateBusy(true);
+		setCreateError(null);
+		try {
+			await authed<EventRecord>("/api/events", token, {
+				method: "POST",
+				body: JSON.stringify({
+					name: createName.trim(),
+					description: createDescription.trim() || undefined,
+					eventDate: createDate || undefined,
+					status: createStatus,
+				})
+			});
+			setCreateName(""); setCreateDescription(""); setCreateDate(""); setCreateStatus("DRAFT");
+			setShowCreateForm(false);
+			onCreated();
+		} catch (err) {
+			setCreateError(err instanceof Error ? err.message : "Failed to create event");
+		} finally {
+			setCreateBusy(false);
+		}
+	}
+
 	return (
 		<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
 			{events.map((ev) => (
@@ -2065,10 +2101,42 @@ function EventListView({ events, onSelect, onLaunchWizard }: { events: EventReco
 					</button>
 				</div>
 			))}
-			<button onClick={onLaunchWizard} className="bg-white rounded-2xl border-2 border-dashed border-gray-200 flex flex-col items-center justify-center p-8 text-gray-400 hover:border-[#E31837] hover:text-[#E31837] transition-all min-h-[200px]">
-				<Plus size={32} className="mb-2" />
-				<span className="font-bold">New Wizard Setup</span>
-			</button>
+
+			{showCreateForm ? (
+				<div className="bg-white rounded-2xl shadow-sm border border-[#005696] p-6 space-y-3">
+					<div className="flex items-center justify-between mb-1">
+						<p className="text-xs font-black text-[#005696] uppercase tracking-widest">Create Event</p>
+						<button onClick={() => { setShowCreateForm(false); setCreateError(null); }} className="text-gray-400 hover:text-gray-600"><X size={16} /></button>
+					</div>
+					{createError && <p className="text-[11px] font-bold text-[#E31837] bg-red-50 rounded-lg px-2 py-1">{createError}</p>}
+					<form onSubmit={(e) => { void submitCreate(e); }} className="space-y-2">
+						<input value={createName} onChange={(e) => setCreateName(e.target.value)} placeholder="Event name *" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+						<input value={createDescription} onChange={(e) => setCreateDescription(e.target.value)} placeholder="Description (optional)" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+						<input type="date" value={createDate} onChange={(e) => setCreateDate(e.target.value)} className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+						<select value={createStatus} onChange={(e) => setCreateStatus(e.target.value as "DRAFT" | "LIVE" | "CLOSED")} className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]">
+							<option value="DRAFT">DRAFT</option>
+							<option value="LIVE">LIVE</option>
+							<option value="CLOSED">CLOSED</option>
+						</select>
+						<button disabled={createBusy} className="w-full py-2.5 rounded-xl bg-[#E31837] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#c1142f] disabled:opacity-60">
+							{createBusy ? "Creating…" : "Create Event"}
+						</button>
+					</form>
+				</div>
+			) : (
+				<div className="grid grid-cols-1 gap-3">
+					<button onClick={() => setShowCreateForm(true)} className="bg-white rounded-2xl border-2 border-dashed border-[#005696]/40 flex flex-col items-center justify-center p-6 text-[#005696] hover:border-[#005696] hover:bg-blue-50 transition-all min-h-[100px]">
+						<Plus size={24} className="mb-1" />
+						<span className="font-bold text-sm">Quick Create Event</span>
+						<span className="text-[10px] text-gray-400 mt-0.5">Name, date, status only</span>
+					</button>
+					<button onClick={onLaunchWizard} className="bg-white rounded-2xl border-2 border-dashed border-gray-200 flex flex-col items-center justify-center p-6 text-gray-400 hover:border-[#E31837] hover:text-[#E31837] transition-all min-h-[100px]">
+						<Plus size={24} className="mb-1" />
+						<span className="font-bold text-sm">Full Wizard Setup</span>
+						<span className="text-[10px] mt-0.5">Event + location + game</span>
+					</button>
+				</div>
+			)}
 		</div>
 	);
 }
@@ -2097,8 +2165,12 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 	const [manageBusy, setManageBusy] = useState(false);
 	const [manageError, setManageError] = useState<string | null>(null);
 	const [manageMessage, setManageMessage] = useState<string | null>(null);
-	const [manageSection, setManageSection] = useState<"locations" | "games" | "deploy">("locations");
+	const [manageSection, setManageSection] = useState<"locations" | "games" | "deploy" | "links" | "settings">("locations");
 	const [manageGameMode, setManageGameMode] = useState<"create" | "edit">("create");
+	const [editEventName, setEditEventName] = useState(selectedEvent?.name ?? "");
+	const [editEventDescription, setEditEventDescription] = useState(selectedEvent?.description ?? "");
+	const [editEventDate, setEditEventDate] = useState(selectedEvent?.eventDate ?? "");
+	const [editEventStatus, setEditEventStatus] = useState<"DRAFT" | "LIVE" | "CLOSED">(selectedEvent?.status ?? "DRAFT");
 	const [newLocationName, setNewLocationName] = useState("");
 	const [newLocationVenue, setNewLocationVenue] = useState("");
 	const [bulkLocationInput, setBulkLocationInput] = useState("");
@@ -2111,6 +2183,7 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 	const [editGameScoreUnit, setEditGameScoreUnit] = useState("maximum points");
 	const [editGameScoringMode, setEditGameScoringMode] = useState<"INDIVIDUAL" | "CUMULATIVE">("INDIVIDUAL");
 	const [deployLocationId, setDeployLocationId] = useState("");
+	const [selectedDeployLocationIds, setSelectedDeployLocationIds] = useState<string[]>([]);
 	const [selectedDeployGameIds, setSelectedDeployGameIds] = useState<string[]>([]);
 	const [publicLinkStatus, setPublicLinkStatus] = useState<string | null>(null);
 	const [deployGameSettingsById, setDeployGameSettingsById] = useState<Record<string, {
@@ -2119,6 +2192,13 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 		totalRounds: string;
 		roundMaxPointsCsv: string;
 	}>>({});
+	const [editDeployedGameId, setEditDeployedGameId] = useState<string>("");
+	const [editDeployedSettings, setEditDeployedSettings] = useState<{
+		scoringAuthority: "ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID";
+		roundsEnabled: boolean;
+		totalRounds: string;
+		roundMaxPointsCsv: string;
+	}>({ scoringAuthority: "ADMIN_ONLY", roundsEnabled: false, totalRounds: "3", roundMaxPointsCsv: "10,10,10" });
 	const gameNameById = useMemo(() => new Map(localGames.map((game) => [game._id, game.name])), [localGames]);
 	const mappedGameOptions = useMemo(() => {
 		const seen = new Set<string>();
@@ -2191,6 +2271,12 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 
 	useEffect(() => {
 		setPublicLinkStatus(null);
+		if (selectedEvent) {
+			setEditEventName(selectedEvent.name);
+			setEditEventDescription(selectedEvent.description ?? "");
+			setEditEventDate(selectedEvent.eventDate ?? "");
+			setEditEventStatus(selectedEvent.status);
+		}
 	}, [eventId]);
 
 	useEffect(() => { void loadContext(); }, [eventId]);
@@ -2212,6 +2298,7 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 		if (!deployLocationId || !locations.some((entry) => entry._id === deployLocationId)) {
 			setDeployLocationId(locations[0]?._id ?? "");
 		}
+		setSelectedDeployLocationIds((prev) => prev.filter((id) => locations.some((entry) => entry._id === id)));
 	}, [locations, deployLocationId]);
 
 	useEffect(() => {
@@ -2227,6 +2314,21 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 			setEditGameScoringMode(firstGame?.scoringMode ?? "INDIVIDUAL");
 		}
 	}, [localGames, editGameId]);
+
+	useEffect(() => {
+		if (!editDeployedGameId) return;
+		const selected = eventGames.find((entry) => entry._id === editDeployedGameId);
+		if (!selected) {
+			setEditDeployedGameId("");
+			return;
+		}
+		setEditDeployedSettings({
+			scoringAuthority: (selected.settings?.scoringAuthority ?? selectedEvent?.scoringAuthority ?? "ADMIN_ONLY") as "ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID",
+			roundsEnabled: selected.settings?.roundsEnabled ?? false,
+			totalRounds: String(selected.settings?.totalRounds ?? "3"),
+			roundMaxPointsCsv: (selected.settings?.roundMaxPoints ?? []).join(", ")
+		});
+	}, [editDeployedGameId, eventGames, selectedEvent?.scoringAuthority]);
 
 	async function loadContext() {
 		setBusy(true);
@@ -2470,8 +2572,8 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 
 	async function deployGameToLocation(event: FormEvent) {
 		event.preventDefault();
-		if (!deployLocationId || selectedDeployGameIds.length === 0) {
-			setManageError("Choose a location and at least one game to deploy");
+		if (selectedDeployLocationIds.length === 0 || selectedDeployGameIds.length === 0) {
+			setManageError("Choose at least one location and at least one game to deploy");
 			return;
 		}
 
@@ -2479,37 +2581,44 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 		setManageError(null);
 		setManageMessage(null);
 		try {
-			const pendingGameIds = selectedDeployGameIds.filter((gameId) => !eventGames.some((entry) => entry.locationId === deployLocationId && entry.gameId === gameId));
+			const created: EventGameRecord[] = [];
 
-			if (pendingGameIds.length === 0) {
-				setManageError("Selected games are already deployed to this location");
-				return;
+			for (const locationId of selectedDeployLocationIds) {
+				const pendingGameIds = selectedDeployGameIds.filter((gameId) => !eventGames.some((entry) => entry.locationId === locationId && entry.gameId === gameId));
+
+				if (pendingGameIds.length === 0) continue;
+
+				const batch = await Promise.all(
+					pendingGameIds.map((gameId) => {
+						const settings = deployGameSettingsById[gameId];
+						const roundMaxPoints = parseRoundMaxPointsCsv(settings?.roundMaxPointsCsv ?? "");
+						const configuredTotalRounds = settings?.roundsEnabled
+							? Math.max(Number(settings.totalRounds || 0) || 0, roundMaxPoints.length)
+							: undefined;
+
+						return authed<EventGameRecord>("/api/event-games", token, {
+							method: "POST",
+							body: JSON.stringify({
+								eventId,
+								locationId,
+								gameId,
+								settings: {
+									scoringAuthority: settings?.scoringAuthority ?? "ADMIN_ONLY",
+									roundsEnabled: settings?.roundsEnabled ?? false,
+									totalRounds: configuredTotalRounds || undefined,
+									roundMaxPoints: roundMaxPoints.length > 0 ? roundMaxPoints : undefined
+								}
+							})
+						});
+					})
+				);
+				created.push(...batch);
 			}
 
-			const created = await Promise.all(
-				pendingGameIds.map((gameId) => {
-					const settings = deployGameSettingsById[gameId];
-					const roundMaxPoints = parseRoundMaxPointsCsv(settings?.roundMaxPointsCsv ?? "");
-					const configuredTotalRounds = settings?.roundsEnabled
-						? Math.max(Number(settings.totalRounds || 0) || 0, roundMaxPoints.length)
-						: undefined;
-
-					return authed<EventGameRecord>("/api/event-games", token, {
-						method: "POST",
-						body: JSON.stringify({
-							eventId,
-							locationId: deployLocationId,
-							gameId,
-							settings: {
-								scoringAuthority: settings?.scoringAuthority ?? "ADMIN_ONLY",
-								roundsEnabled: settings?.roundsEnabled ?? false,
-								totalRounds: configuredTotalRounds || undefined,
-								roundMaxPoints: roundMaxPoints.length > 0 ? roundMaxPoints : undefined
-							}
-						})
-					});
-				})
-			);
+			if (created.length === 0) {
+				setManageError("All selected games are already deployed to all selected locations");
+				return;
+			}
 
 			setEventGames((prev) => [...created, ...prev]);
 			setJoinLinks((prev) => {
@@ -2520,21 +2629,90 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 				return next;
 			});
 			setSelectedDeployGameIds([]);
+			setSelectedDeployLocationIds([]);
 			setDeployGameSettingsById((prev) => {
 				const next = { ...prev };
-				for (const gameId of pendingGameIds) {
+				for (const gameId of selectedDeployGameIds) {
 					delete next[gameId];
 				}
 				return next;
 			});
-			setManageMessage(`${created.length} game(s) deployed to location`);
+			setManageMessage(`${created.length} game(s) deployed`);
 			setQuickSetupOpen(false);
-			setLinkWizardInitialLocationId(deployLocationId);
+			setLinkWizardInitialLocationId(selectedDeployLocationIds[0] ?? "");
 			setLinkWizardInitialEventGameId(created.length === 1 ? created[0]._id : "");
 			setLinkWizardOpen(true);
 			void onReload();
 		} catch (caught) {
 			setManageError(caught instanceof Error ? caught.message : "Unable to deploy game");
+		} finally {
+			setManageBusy(false);
+		}
+	}
+
+	async function saveDeployedGameSettings(event: FormEvent) {
+		event.preventDefault();
+		if (!editDeployedGameId) {
+			setManageError("Select a deployed game to edit");
+			return;
+		}
+
+		setManageBusy(true);
+		setManageError(null);
+		setManageMessage(null);
+		try {
+			const roundMaxPoints = parseRoundMaxPointsCsv(editDeployedSettings.roundMaxPointsCsv);
+			const configuredTotalRounds = editDeployedSettings.roundsEnabled
+				? Math.max(Number(editDeployedSettings.totalRounds || 0) || 0, roundMaxPoints.length)
+				: undefined;
+
+			const updated = await authed<EventGameRecord>(`/api/event-games/${editDeployedGameId}`, token, {
+				method: "PATCH",
+				body: JSON.stringify({
+					settings: {
+						scoringAuthority: editDeployedSettings.scoringAuthority,
+						roundsEnabled: editDeployedSettings.roundsEnabled,
+						totalRounds: configuredTotalRounds ?? null,
+						roundMaxPoints: roundMaxPoints.length > 0 ? roundMaxPoints : null
+					}
+				})
+			});
+
+			setEventGames((prev) => prev.map((eg) => (eg._id === updated._id ? updated : eg)));
+			setEditDeployedSettings({
+				scoringAuthority: (updated.settings?.scoringAuthority ?? selectedEvent.scoringAuthority ?? "ADMIN_ONLY") as "ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID",
+				roundsEnabled: updated.settings?.roundsEnabled ?? false,
+				totalRounds: String(updated.settings?.totalRounds ?? "3"),
+				roundMaxPointsCsv: (updated.settings?.roundMaxPoints ?? []).join(", ")
+			});
+			setManageMessage("Deployed game settings saved.");
+		} catch (caught) {
+			setManageError(caught instanceof Error ? caught.message : "Unable to save settings");
+		} finally {
+			setManageBusy(false);
+		}
+	}
+
+	async function saveEventSettings(event: FormEvent) {
+		event.preventDefault();
+		if (!editEventName.trim()) { setManageError("Event name is required"); return; }
+		setManageBusy(true);
+		setManageError(null);
+		setManageMessage(null);
+		try {
+			await authed<EventRecord>(`/api/events/${eventId}`, token, {
+				method: "PATCH",
+				body: JSON.stringify({
+					name: editEventName.trim(),
+					description: editEventDescription.trim() || undefined,
+					eventDate: editEventDate || undefined,
+					status: editEventStatus,
+				})
+			});
+			setManageMessage("Event settings saved.");
+			void onReload();
+		} catch (err) {
+			setManageError(err instanceof Error ? err.message : "Unable to save settings");
 		} finally {
 			setManageBusy(false);
 		}
@@ -2618,6 +2796,16 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 	}
 
 	if (!selectedEvent) return null;
+
+	function toEditableDeployedSettings(eg: EventGameRecord) {
+		return {
+			scoringAuthority: (eg.settings?.scoringAuthority ?? selectedEvent.scoringAuthority ?? "ADMIN_ONLY") as "ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID",
+			roundsEnabled: eg.settings?.roundsEnabled ?? false,
+			totalRounds: String(eg.settings?.totalRounds ?? "3"),
+			roundMaxPointsCsv: (eg.settings?.roundMaxPoints ?? []).join(", ")
+		};
+	}
+
 	const topScore = filteredLeaders[0]?.totalPoints ?? 0;
 
 	return (
@@ -2820,10 +3008,12 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 							{manageError && <p className="mb-3 text-[11px] font-bold text-[#E31837] bg-red-50 border border-red-100 rounded-lg px-2 py-1.5">{manageError}</p>}
 
 							<div className="space-y-3">
-								<div className="grid grid-cols-3 gap-2 rounded-xl bg-gray-100 p-1">
+								<div className="grid grid-cols-5 gap-2 rounded-xl bg-gray-100 p-1">
 									<button type="button" onClick={() => setManageSection("locations")} className={`py-2 text-[10px] font-black uppercase tracking-widest rounded-lg transition-colors ${manageSection === "locations" ? "bg-white text-[#005696] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>Locations</button>
 									<button type="button" onClick={() => setManageSection("games")} className={`py-2 text-[10px] font-black uppercase tracking-widest rounded-lg transition-colors ${manageSection === "games" ? "bg-white text-[#005696] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>Games</button>
 									<button type="button" onClick={() => setManageSection("deploy")} className={`py-2 text-[10px] font-black uppercase tracking-widest rounded-lg transition-colors ${manageSection === "deploy" ? "bg-white text-[#E31837] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>Deploy</button>
+									<button type="button" onClick={() => setManageSection("links")} className={`py-2 text-[10px] font-black uppercase tracking-widest rounded-lg transition-colors ${manageSection === "links" ? "bg-white text-[#005696] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>Links</button>
+									<button type="button" onClick={() => setManageSection("settings")} className={`py-2 text-[10px] font-black uppercase tracking-widest rounded-lg transition-colors ${manageSection === "settings" ? "bg-white text-[#005696] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>Settings</button>
 								</div>
 
 								<div className="max-h-[62vh] overflow-y-auto pr-1">
@@ -2921,52 +3111,64 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 									)}
 
 									{manageSection === "deploy" && (
-										<form onSubmit={(event) => { void deployGameToLocation(event); }} className="space-y-2 border border-gray-100 rounded-xl p-3">
-											<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Deploy Selected Games To Location</p>
-											<select value={deployLocationId} onChange={(event) => setDeployLocationId(event.target.value)} className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]">
-												<option value="">Select location</option>
-												{locations.map((location) => <option key={location._id} value={location._id}>{location.name}</option>)}
-											</select>
-											<div className="max-h-36 overflow-y-auto space-y-1 border border-gray-100 rounded-lg p-2">
-												{localGames.map((game) => (
-													<label key={game._id} className="flex items-center gap-2 text-xs font-bold text-gray-600">
-														<input
-															type="checkbox"
-															checked={selectedDeployGameIds.includes(game._id)}
-															onChange={(event) => {
-																setSelectedDeployGameIds((prev) => event.target.checked ? [...prev, game._id] : prev.filter((id) => id !== game._id));
-																if (event.target.checked) {
-																	setDeployGameSettingsById((prev) => ({
-																		...prev,
-																		[game._id]: prev[game._id] ?? {
-																			scoringAuthority: "ADMIN_ONLY",
-																			roundsEnabled: false,
-																			totalRounds: "3",
-																			roundMaxPointsCsv: "10,10,10"
-																		}
-																	}));
-																} else {
-																	setDeployGameSettingsById((prev) => {
-																		const next = { ...prev };
-																		delete next[game._id];
-																		return next;
-																	});
-																}
-															}}
-														/>
-														<span>{game.name}</span>
-													</label>
-												))}
-											</div>
-											{selectedDeployGameIds.length > 0 && (
-												<div className="space-y-2">
-													<p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Per-game deploy settings</p>
-													{selectedDeployGameIds.map((gameId) => {
+										<div className="space-y-3">
+											<form onSubmit={(event) => { void deployGameToLocation(event); }} className="space-y-2 border border-gray-100 rounded-xl p-3">
+												<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Deploy Games To Locations</p>
+												<p className="text-[10px] font-black text-gray-500 uppercase tracking-widest mt-1">Select Locations</p>
+												<div className="max-h-28 overflow-y-auto space-y-1 border border-gray-100 rounded-lg p-2">
+													{locations.length === 0 && <p className="text-xs text-gray-400">No locations yet. Add locations first.</p>}
+													{locations.map((loc) => (
+														<label key={loc._id} className="flex items-center gap-2 text-xs font-bold text-gray-600">
+															<input
+																type="checkbox"
+																checked={selectedDeployLocationIds.includes(loc._id)}
+																onChange={(e) => setSelectedDeployLocationIds((prev) => e.target.checked ? [...prev, loc._id] : prev.filter((id) => id !== loc._id))}
+															/>
+															<span>{loc.name}{loc.venue ? <span className="text-gray-400 font-normal"> — {loc.venue}</span> : null}</span>
+														</label>
+													))}
+												</div>
+												<p className="text-[10px] font-black text-gray-500 uppercase tracking-widest mt-1">Select Games</p>
+												<div className="max-h-28 overflow-y-auto space-y-1 border border-gray-100 rounded-lg p-2">
+													{localGames.map((game) => (
+														<label key={game._id} className="flex items-center gap-2 text-xs font-bold text-gray-600">
+															<input
+																type="checkbox"
+																checked={selectedDeployGameIds.includes(game._id)}
+																onChange={(event) => {
+																	setSelectedDeployGameIds((prev) => event.target.checked ? [...prev, game._id] : prev.filter((id) => id !== game._id));
+																	if (event.target.checked) {
+																		setDeployGameSettingsById((prev) => ({
+																			...prev,
+																			[game._id]: prev[game._id] ?? {
+																				scoringAuthority: (selectedEvent.scoringAuthority ?? "ADMIN_ONLY") as "ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID",
+																				roundsEnabled: false,
+																				totalRounds: "3",
+																				roundMaxPointsCsv: ""
+																			}
+																		}));
+																	} else {
+																		setDeployGameSettingsById((prev) => {
+																			const next = { ...prev };
+																			delete next[game._id];
+																			return next;
+																		});
+																	}
+																}}
+															/>
+															<span>{game.name}</span>
+														</label>
+													))}
+												</div>
+												{selectedDeployGameIds.length > 0 && (
+													<div className="space-y-2">
+														<p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Per-game settings</p>
+														{selectedDeployGameIds.map((gameId) => {
 														const settings = deployGameSettingsById[gameId] ?? {
-															scoringAuthority: "ADMIN_ONLY" as const,
+															scoringAuthority: (selectedEvent.scoringAuthority ?? "ADMIN_ONLY") as "ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID",
 															roundsEnabled: false,
 															totalRounds: "3",
-															roundMaxPointsCsv: "10,10,10"
+															roundMaxPointsCsv: ""
 														};
 														return (
 															<div key={gameId} className="border border-gray-100 rounded-xl p-2.5 space-y-2 bg-gray-50">
@@ -2985,9 +3187,118 @@ function EventDetailView({ token, eventId, events, games, onBack, onReload }: {
 															</div>
 														);
 													})}
-												</div>
+													</div>
+												)}
+												<button disabled={manageBusy} className="w-full py-2 rounded-xl bg-[#E31837] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#c1142f] disabled:opacity-60">Deploy Selected Games</button>
+											</form>
+
+											<details className="border border-gray-100 rounded-xl p-3">
+												<summary className="cursor-pointer list-none flex items-center justify-between text-[10px] font-black text-gray-500 uppercase tracking-widest">
+													<span>Edit Existing Deployment Settings</span>
+													<span>Expand</span>
+												</summary>
+												<form onSubmit={(event) => { void saveDeployedGameSettings(event); }} className="mt-3 space-y-2">
+													<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Select a deployed game to edit its settings</p>
+													<select
+														value={editDeployedGameId}
+														onChange={(e) => {
+															const eg = eventGames.find((x) => x._id === e.target.value);
+															setEditDeployedGameId(e.target.value);
+															if (eg) {
+																setEditDeployedSettings(toEditableDeployedSettings(eg));
+															}
+														}}
+														className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]"
+													>
+														<option value="">Select deployed game…</option>
+														{groupedEventGames.map((group) =>
+															group.items.map((eg) => (
+																<option key={eg._id} value={eg._id}>
+																	{group.locationName} — {eg.title ?? gameNameById.get(eg.gameId) ?? "Game"}
+																</option>
+															))
+														)}
+													</select>
+													{editDeployedGameId && (
+														<>
+															<select value={editDeployedSettings.scoringAuthority} onChange={(e) => setEditDeployedSettings((s) => ({ ...s, scoringAuthority: e.target.value as "ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID" }))} className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]">
+																<option value="ADMIN_ONLY">Scoring: Admin only</option>
+																<option value="PLAYER_SELF">Scoring: Player self-scoring</option>
+																<option value="HYBRID">Scoring: Hybrid (Admin + Player)</option>
+															</select>
+															<label className="text-[10px] font-black text-gray-500 uppercase tracking-widest flex items-center gap-2">
+																<input type="checkbox" checked={editDeployedSettings.roundsEnabled} onChange={(e) => setEditDeployedSettings((s) => ({ ...s, roundsEnabled: e.target.checked }))} />
+																Enable rounds
+															</label>
+															<input type="number" min={1} value={editDeployedSettings.totalRounds} onChange={(e) => setEditDeployedSettings((s) => ({ ...s, totalRounds: e.target.value }))} disabled={!editDeployedSettings.roundsEnabled} placeholder="Total rounds" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837] disabled:opacity-50" />
+															<input type="text" value={editDeployedSettings.roundMaxPointsCsv} onChange={(e) => setEditDeployedSettings((s) => ({ ...s, roundMaxPointsCsv: e.target.value }))} placeholder="Round max points (comma separated)" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+															<button disabled={manageBusy} className="w-full py-2 rounded-xl bg-[#005696] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#004477] disabled:opacity-60">Save Settings</button>
+														</>
+													)}
+												</form>
+											</details>
+										</div>
+									)}
+
+									{manageSection === "links" && (
+										<div className="space-y-2">
+											<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">All Player Join Links</p>
+											{groupedEventGames.length === 0 && (
+												<p className="text-xs text-gray-400 border border-dashed border-gray-200 rounded-xl p-4">No games deployed yet. Use the Deploy tab to get started.</p>
 											)}
-											<button disabled={manageBusy} className="w-full py-2 rounded-xl bg-[#E31837] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#c1142f] disabled:opacity-60">Deploy Selected Games</button>
+											{groupedEventGames.map((group) => (
+												<div key={group.locationId} className="border border-gray-100 rounded-xl p-3 space-y-2">
+													<p className="text-[10px] font-black text-[#005696] uppercase tracking-widest">{group.locationName}</p>
+													{group.items.map((eg) => {
+														const link = joinLinks[eg._id];
+														const playerUrl = link?.playerUrl ?? link?.joinUrl ?? buildClientJoinLink(eg._id, eg.joinToken).joinUrl;
+														const label = eg.title ?? gameNameById.get(eg.gameId) ?? "Game";
+														return (
+															<div key={eg._id} className="bg-gray-50 rounded-lg p-2 space-y-1">
+																<p className="text-xs font-black text-gray-700">{label}</p>
+																<div className="flex items-center gap-2">
+																	<p className="text-[10px] text-gray-500 truncate flex-1 font-mono">{playerUrl}</p>
+																	<button
+																		type="button"
+																		onClick={() => { void navigator.clipboard.writeText(playerUrl).catch(() => undefined); setManageMessage(`Copied link for ${label}`); }}
+																		className="shrink-0 px-2 py-1 rounded-lg bg-white border border-gray-200 text-[10px] font-black text-gray-500 hover:bg-gray-100 flex items-center gap-1"
+																	>
+																		<Copy size={10} /> Copy
+																	</button>
+																</div>
+															</div>
+														);
+													})}
+												</div>
+											))}
+											<div className="border border-gray-100 rounded-xl p-3">
+												<p className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-2">Public Leaderboard</p>
+												<div className="flex items-center gap-2">
+													<p className="text-[10px] text-gray-500 truncate flex-1 font-mono">{publicLeaderboardUrl}</p>
+													<button
+														type="button"
+														onClick={() => { void navigator.clipboard.writeText(publicLeaderboardUrl).catch(() => undefined); setManageMessage("Public leaderboard link copied"); }}
+														className="shrink-0 px-2 py-1 rounded-lg bg-white border border-gray-200 text-[10px] font-black text-gray-500 hover:bg-gray-100 flex items-center gap-1"
+													>
+														<Copy size={10} /> Copy
+													</button>
+												</div>
+											</div>
+										</div>
+									)}
+
+									{manageSection === "settings" && (
+										<form onSubmit={(event) => { void saveEventSettings(event); }} className="space-y-2 border border-gray-100 rounded-xl p-3">
+											<p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Event Settings</p>
+											<input value={editEventName} onChange={(e) => setEditEventName(e.target.value)} placeholder="Event name" className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+											<textarea value={editEventDescription} onChange={(e) => setEditEventDescription(e.target.value)} placeholder="Description (optional)" rows={2} className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+											<input type="date" value={editEventDate} onChange={(e) => setEditEventDate(e.target.value)} className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+											<select value={editEventStatus} onChange={(e) => setEditEventStatus(e.target.value as "DRAFT" | "LIVE" | "CLOSED")} className="w-full bg-gray-50 border border-gray-200 p-2.5 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]">
+												<option value="DRAFT">Status: Draft</option>
+												<option value="LIVE">Status: Live</option>
+												<option value="CLOSED">Status: Closed</option>
+											</select>
+											<button disabled={manageBusy} className="w-full py-2 rounded-xl bg-[#005696] text-white text-[10px] font-black uppercase tracking-widest hover:bg-[#004477] disabled:opacity-60">Save Event Settings</button>
 										</form>
 									)}
 								</div>
@@ -3472,6 +3783,22 @@ function WizardModal({ token, events, games, onClose, onComplete }: {
 	const [wizardScoringAuthority, setWizardScoringAuthority] = useState<"ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID">("ADMIN_ONLY");
 	const [wizardTotalRounds, setWizardTotalRounds] = useState("3");
 	const [wizardRoundMaxPointsCsv, setWizardRoundMaxPointsCsv] = useState("10,10,10");
+	const [showAdvancedScoring, setShowAdvancedScoring] = useState(false);
+
+	function normalizeGameName(value: string): string {
+		return value.trim().toLowerCase();
+	}
+
+	function createGameKey(name: string): string {
+		const normalized = name
+			.trim()
+			.toLowerCase()
+			.replace(/[^a-z0-9]+/g, "-")
+			.replace(/^-+|-+$/g, "");
+		const base = (normalized || "game").slice(0, 32);
+		const suffix = Math.random().toString(36).slice(2, 8);
+		return `${base}-${suffix}`.slice(0, 40);
+	}
 
 	async function loadLocations(eventId: string) {
 		const locs = await authed<LocationRecord[]>(`/api/events/${eventId}/locations`, token);
@@ -3538,10 +3865,21 @@ function WizardModal({ token, events, games, onClose, onComplete }: {
 		setSelectedGame(gm);
 		setBusy(true); setError(null);
 		try {
-			const roundMaxPoints = parseRoundMaxPointsCsv(wizardRoundMaxPointsCsv);
+			const roundMaxPoints = wizardRoundsEnabled
+				? parseRoundMaxPointsCsv(wizardRoundMaxPointsCsv)
+				: [];
 			const totalRounds = wizardRoundsEnabled
-				? Math.max(Number(wizardTotalRounds) || 0, roundMaxPoints.length)
+				? Math.max(1, Number(wizardTotalRounds) || 0, roundMaxPoints.length)
 				: undefined;
+
+			const settings: EventGameRecord["settings"] = {
+				scoringAuthority: wizardScoringAuthority,
+				roundsEnabled: wizardRoundsEnabled,
+				...(wizardRoundsEnabled ? {
+					totalRounds,
+					...(roundMaxPoints.length > 0 ? { roundMaxPoints } : {})
+				} : {})
+			};
 
 			const eg = await authed<EventGameRecord>("/api/event-games", token, {
 				method: "POST",
@@ -3549,12 +3887,7 @@ function WizardModal({ token, events, games, onClose, onComplete }: {
 					eventId: selectedEvent._id,
 					locationId: selectedLocation._id,
 					gameId: gm._id,
-					settings: {
-						scoringAuthority: wizardScoringAuthority,
-						roundsEnabled: wizardRoundsEnabled,
-						totalRounds: totalRounds || undefined,
-						roundMaxPoints: roundMaxPoints.length > 0 ? roundMaxPoints : undefined
-					}
+					settings
 				})
 			});
 			const link = await authed<JoinLinkResponse>(`/api/event-games/${eg._id}/join-link`, token);
@@ -3565,13 +3898,46 @@ function WizardModal({ token, events, games, onClose, onComplete }: {
 	}
 
 	async function createGame() {
-		if (!newGameName.trim()) return;
+		const trimmedName = newGameName.trim();
+		if (!trimmedName) return;
+
+		const existing = games.find((entry) => normalizeGameName(entry.name) === normalizeGameName(trimmedName));
+		if (existing) {
+			setError(null);
+			await deploy(existing);
+			return;
+		}
+
 		setBusy(true); setError(null);
 		try {
-			const key = newGameName.trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
-			const gm = await authed<GameRecord>("/api/games", token, { method: "POST", body: JSON.stringify({ name: newGameName.trim(), key, scoreUnit: newGameScoreUnit }) });
+			const key = createGameKey(trimmedName);
+			const gm = await authed<GameRecord>("/api/games", token, {
+				method: "POST",
+				body: JSON.stringify({
+					name: trimmedName,
+					key,
+					scoreUnit: newGameScoreUnit.trim() || "points"
+				})
+			});
 			await deploy(gm);
-		} catch (err) { setError(err instanceof Error ? err.message : "Failed"); }
+		} catch (err) {
+			if (err instanceof ApiError && err.status === 409) {
+				try {
+					const refreshed = await authed<GameRecord[]>("/api/games", token);
+					const match = refreshed.find((entry) => normalizeGameName(entry.name) === normalizeGameName(trimmedName));
+					if (match) {
+						setError("Existing game found with the same name. Using that game.");
+						await deploy(match);
+						return;
+					}
+				} catch {
+					// Fall through to a user-visible message.
+				}
+				setError("Game key already exists. Please use a more specific game name.");
+			} else {
+				setError(err instanceof Error ? err.message : "Failed");
+			}
+		}
 		finally { setBusy(false); }
 	}
 
@@ -3666,18 +4032,37 @@ function WizardModal({ token, events, games, onClose, onComplete }: {
 					{step === 3 && (!creatingGame ? (
 						<div className="space-y-4">
 							<label className="block text-sm font-bold text-gray-700 uppercase tracking-tight">Select Game for <span className="text-[#005696]">{selectedLocation?.name}</span></label>
-							<div className="grid grid-cols-1 sm:grid-cols-3 gap-2 p-3 bg-gray-50 border border-gray-100 rounded-xl">
-								<select value={wizardScoringAuthority} onChange={(e) => setWizardScoringAuthority(e.target.value as "ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID")} className="w-full p-2.5 bg-white border border-gray-200 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]">
-									<option value="ADMIN_ONLY">Scoring: Admin only</option>
-									<option value="PLAYER_SELF">Scoring: Player self-scoring</option>
-									<option value="HYBRID">Scoring: Hybrid (Admin + Player)</option>
-								</select>
-								<label className="text-[10px] font-black text-gray-500 uppercase tracking-widest flex items-center gap-2">
-									<input type="checkbox" checked={wizardRoundsEnabled} onChange={(e) => setWizardRoundsEnabled(e.target.checked)} />
-									Enable rounds
-								</label>
-								<input type="number" min={1} value={wizardTotalRounds} onChange={(e) => setWizardTotalRounds(e.target.value)} disabled={!wizardRoundsEnabled} placeholder="Total rounds" className="w-full p-2.5 bg-white border border-gray-200 rounded-xl text-xs font-bold outline-none focus:border-[#E31837] disabled:opacity-50" />
-								<input type="text" value={wizardRoundMaxPointsCsv} onChange={(e) => setWizardRoundMaxPointsCsv(e.target.value)} disabled={!wizardRoundsEnabled} placeholder="Round max points (e.g. 10,15,20)" className="w-full p-2.5 bg-white border border-gray-200 rounded-xl text-xs font-bold outline-none focus:border-[#E31837] disabled:opacity-50" />
+							<div className="p-3 bg-gray-50 border border-gray-100 rounded-xl space-y-2">
+								<div className="flex items-center justify-between gap-3">
+									<p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Quick setup uses default scoring</p>
+									<button
+										type="button"
+										onClick={() => setShowAdvancedScoring((prev) => !prev)}
+										className="text-[10px] font-black uppercase tracking-widest text-[#005696] hover:text-[#E31837]"
+									>
+										{showAdvancedScoring ? "Hide Advanced" : "Advanced Scoring"}
+									</button>
+								</div>
+								<p className="text-xs font-bold text-gray-500">Default: Admin-only, single-round scoring. You can change this later.</p>
+								{showAdvancedScoring && (
+									<div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-2">
+										<select value={wizardScoringAuthority} onChange={(e) => setWizardScoringAuthority(e.target.value as "ADMIN_ONLY" | "PLAYER_SELF" | "HYBRID")} className="w-full p-2.5 bg-white border border-gray-200 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]">
+											<option value="ADMIN_ONLY">Scoring: Admin only</option>
+											<option value="PLAYER_SELF">Scoring: Player self-scoring</option>
+											<option value="HYBRID">Scoring: Hybrid (Admin + Player)</option>
+										</select>
+										<label className="text-[10px] font-black text-gray-500 uppercase tracking-widest flex items-center gap-2">
+											<input type="checkbox" checked={wizardRoundsEnabled} onChange={(e) => setWizardRoundsEnabled(e.target.checked)} />
+											Enable rounds
+										</label>
+										{wizardRoundsEnabled && (
+											<>
+												<input type="number" min={1} value={wizardTotalRounds} onChange={(e) => setWizardTotalRounds(e.target.value)} placeholder="Total rounds" className="w-full p-2.5 bg-white border border-gray-200 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+												<input type="text" value={wizardRoundMaxPointsCsv} onChange={(e) => setWizardRoundMaxPointsCsv(e.target.value)} placeholder="Round max points (e.g. 10,15,20)" className="w-full p-2.5 bg-white border border-gray-200 rounded-xl text-xs font-bold outline-none focus:border-[#E31837]" />
+											</>
+										)}
+									</div>
+								)}
 							</div>
 							<div className="grid gap-3 max-h-64 overflow-y-auto">
 								<button onClick={() => setCreatingGame(true)} className="w-full p-4 border-2 border-dashed border-gray-300 rounded-xl text-gray-500 font-bold hover:border-[#E31837] hover:text-[#E31837] transition-all flex items-center justify-center gap-2">
